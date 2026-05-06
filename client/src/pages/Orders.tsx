@@ -13,6 +13,8 @@ import {
   AlertCircle,
   QrCode,
   Clock,
+  Download,
+  Database,
 } from "lucide-react";
 
 const PAGE_SIZE = 20;
@@ -24,6 +26,9 @@ export default function Orders() {
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [lookbackDays] = useState(7);
+
+  const utils = trpc.useUtils();
 
   const { data, isLoading } = trpc.orders.list.useQuery({
     page,
@@ -32,12 +37,42 @@ export default function Orders() {
     search: search || undefined,
   });
 
-  const syncMutation = trpc.products.sync.useMutation({
+  // Primary action: fetch delivery notes from Xentral API
+  const fetchMutation = trpc.orders.fetchFromXentral.useMutation({
     onSuccess: (result) => {
-      toast.success(`Sync Products complete — ${result.count} tobacco products loaded`);
+      utils.orders.list.invalidate();
+      if (result.fetched === 0) {
+        toast.info(`No delivery notes found in the last ${lookbackDays} days`);
+      } else {
+        const readyCount = result.imported;
+        const errorCount = result.errors;
+        if (readyCount > 0 && errorCount === 0) {
+          toast.success(
+            `Fetched ${result.fetched} delivery note${result.fetched !== 1 ? "s" : ""} — ${readyCount} ready`
+          );
+        } else if (readyCount > 0 && errorCount > 0) {
+          toast.warning(
+            `Fetched ${result.fetched} — ${readyCount} ready, ${errorCount} with errors`
+          );
+        } else {
+          toast.error(
+            `Fetched ${result.fetched} delivery note${result.fetched !== 1 ? "s" : ""} — ${errorCount} error${errorCount !== 1 ? "s" : ""} (check order details)`
+          );
+        }
+      }
     },
     onError: (err) => {
-      toast.error(`Sync failed: ${err.message}`);
+      toast.error(`Fetch failed: ${err.message}`);
+    },
+  });
+
+  // Secondary action: refresh tobacco product cache
+  const syncMutation = trpc.products.sync.useMutation({
+    onSuccess: (result) => {
+      toast.success(`Product cache refreshed — ${result.count} tobacco products loaded`);
+    },
+    onError: (err) => {
+      toast.error(`Product sync failed: ${err.message}`);
     },
   });
 
@@ -71,25 +106,41 @@ export default function Orders() {
             </div>
             <div>
               <h1 className="text-base font-semibold text-foreground leading-tight">TNT Bridge</h1>
-              <p className="text-xs text-muted-foreground">Xentral → Osapiens</p>
+              <p className="text-xs text-muted-foreground">Xentral &rarr; Osapiens</p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+
+          <div className="flex items-center gap-2">
+            {/* Product cache indicator */}
             {cacheStats.data && (
               <span className="hidden sm:inline-flex items-center gap-1.5 text-xs text-muted-foreground bg-card border border-border rounded-lg px-2.5 py-1.5">
-                <Package className="h-3 w-3" />
+                <Database className="h-3 w-3" />
                 {cacheStats.data.count} products cached
               </span>
             )}
+
+            {/* Secondary: Sync Products (refresh tobacco product cache only) */}
             <Button
               size="sm"
-              variant="outline"
+              variant="ghost"
               onClick={() => syncMutation.mutate()}
               disabled={syncMutation.isPending}
-              className="gap-2 border-border text-foreground hover:bg-accent"
+              title="Refresh tobacco product cache (Category 95000)"
+              className="gap-1.5 text-muted-foreground hover:text-foreground hover:bg-accent"
             >
               <RefreshCw className={`h-3.5 w-3.5 ${syncMutation.isPending ? "animate-spin" : ""}`} />
-              Sync Products
+              <span className="hidden md:inline text-xs">Sync Products</span>
+            </Button>
+
+            {/* Primary: Fetch Orders from Xentral */}
+            <Button
+              size="sm"
+              onClick={() => fetchMutation.mutate({ lookbackDays })}
+              disabled={fetchMutation.isPending}
+              className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90"
+            >
+              <Download className={`h-3.5 w-3.5 ${fetchMutation.isPending ? "animate-bounce" : ""}`} />
+              {fetchMutation.isPending ? "Fetching\u2026" : "Fetch Orders"}
             </Button>
           </div>
         </div>
@@ -101,7 +152,7 @@ export default function Orders() {
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
             <Input
-              placeholder="Search by order number or customer…"
+              placeholder="Search by order number or customer\u2026"
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               className="pl-9 bg-card border-border text-foreground placeholder:text-muted-foreground"
@@ -112,28 +163,29 @@ export default function Orders() {
           </Button>
         </form>
 
-        {/* Status Tabs */}
-        <div className="flex gap-1 p-1 bg-card rounded-xl border border-border w-fit">
-          {statusTabs.map((tab) => (
-            <button
-              key={tab.value}
-              onClick={() => { setStatusFilter(tab.value); setPage(1); }}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
-                statusFilter === tab.value
-                  ? "bg-primary text-primary-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground hover:bg-accent"
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
+        {/* Status Tabs + count */}
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div className="flex gap-1 p-1 bg-card rounded-xl border border-border w-fit">
+            {statusTabs.map((tab) => (
+              <button
+                key={tab.value}
+                onClick={() => { setStatusFilter(tab.value); setPage(1); }}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                  statusFilter === tab.value
+                    ? "bg-primary text-primary-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+          {data && (
+            <p className="text-xs text-muted-foreground">
+              {data.total} order{data.total !== 1 ? "s" : ""}
+            </p>
+          )}
         </div>
-
-        {data && (
-          <p className="text-xs text-muted-foreground">
-            {data.total} order{data.total !== 1 ? "s" : ""}
-          </p>
-        )}
 
         {/* Order List */}
         {isLoading ? (
@@ -149,7 +201,8 @@ export default function Orders() {
             </div>
             <p className="font-medium text-foreground">No orders found</p>
             <p className="text-sm text-muted-foreground mt-1 max-w-xs">
-              Delivery notes containing tobacco products will appear here automatically
+              Click <strong className="text-foreground">Fetch Orders</strong> to pull recent delivery notes from Xentral,
+              or configure a webhook in Xentral to push them automatically.
             </p>
           </div>
         ) : (

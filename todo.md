@@ -33,4 +33,12 @@
 - [x] Vitest: QR generator tests (2 tests)
 - [x] Vitest: auth.logout test (1 test)
 - [x] Run pnpm test — all 12 tests pass
-- [ ] Save checkpoint
+- [x] Save checkpoint
+
+## Phase 5 — Fetch Orders (Active Polling)
+- [x] Add server-side fetchDeliveryNotesFromXentral() in xentralPoller.ts
+- [x] Add tRPC procedure: orders.fetchFromXentral (admin only)
+- [x] Replace "Sync Products" header button with "Fetch Orders" primary button
+- [x] Keep product cache refresh as a small secondary icon button
+- [x] Show count of newly imported orders in toast after fetch
+- [x] Update Vitest tests for the new poller logic

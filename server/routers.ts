@@ -7,6 +7,7 @@ import { TRPCError } from "@trpc/server";
 import { listDeliveryNotes, getDeliveryNoteById } from "./db";
 import { refreshProductCache, getCacheStats } from "./productCache";
 import { retryDeliveryNote } from "./webhookProcessor";
+import { fetchAndProcessDeliveryNotes } from "./xentralPoller";
 
 // ─── Admin guard ──────────────────────────────────────────────────────────────
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -19,7 +20,6 @@ const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
 // ─── App Router ───────────────────────────────────────────────────────────────
 export const appRouter = router({
   system: systemRouter,
-
   auth: router({
     me: publicProcedure.query((opts) => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {
@@ -66,7 +66,6 @@ export const appRouter = router({
       .query(async ({ input, ctx }) => {
         const note = await getDeliveryNoteById(input.id);
         if (!note) throw new TRPCError({ code: "NOT_FOUND", message: "Order not found" });
-
         // Warehouse users only see QR + basic info; admins see full detail
         if (ctx.user.role === "user") {
           return {
@@ -87,7 +86,6 @@ export const appRouter = router({
             rawPayload: null,
           };
         }
-
         return {
           ...note,
           rawPayload: note.rawPayload,
@@ -98,6 +96,22 @@ export const appRouter = router({
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input }) => {
         const result = await retryDeliveryNote(input.id);
+        return result;
+      }),
+
+    /**
+     * Fetch Orders — admin-only procedure that actively polls the Xentral API
+     * for recent delivery notes and processes them through the pipeline.
+     * This is the primary way to get orders into the dashboard without webhooks.
+     */
+    fetchFromXentral: adminProcedure
+      .input(
+        z.object({
+          lookbackDays: z.number().min(1).max(90).default(7),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const result = await fetchAndProcessDeliveryNotes(input.lookbackDays);
         return result;
       }),
   }),
@@ -114,7 +128,6 @@ export const appRouter = router({
       }
       return { count: result.count, syncedAt: new Date() };
     }),
-
     cacheStats: protectedProcedure.query(() => {
       return getCacheStats();
     }),
