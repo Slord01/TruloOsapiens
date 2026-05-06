@@ -106,7 +106,7 @@ describe("fetchAndProcessDeliveryNotes", () => {
   beforeEach(() => {
     process.env = {
       ...originalEnv,
-      XENTRAL_BASE_URL: "https://my-company.xentral.biz",
+      XENTRAL_API_URL: "https://my-company.xentral.biz",
       XENTRAL_API_KEY: "test-api-key",
     };
   });
@@ -117,11 +117,11 @@ describe("fetchAndProcessDeliveryNotes", () => {
   });
 
   it("throws immediately when credentials are missing", async () => {
-    delete process.env.XENTRAL_BASE_URL;
+    delete process.env.XENTRAL_API_URL;
     delete process.env.XENTRAL_API_KEY;
 
     await expect(fetchAndProcessDeliveryNotes()).rejects.toThrow(
-      "XENTRAL_BASE_URL and XENTRAL_API_KEY must be set"
+      "XENTRAL_API_URL and XENTRAL_API_KEY must be set"
     );
   });
 

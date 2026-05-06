@@ -32,12 +32,12 @@ export interface PollResult {
 export async function fetchAndProcessDeliveryNotes(
   lookbackDays = 7
 ): Promise<PollResult> {
-  const baseUrl = process.env.XENTRAL_BASE_URL?.replace(/\/$/, "");
+  const baseUrl = (process.env.XENTRAL_API_URL ?? process.env.XENTRAL_BASE_URL)?.replace(/\/$/, "");
   const apiKey = process.env.XENTRAL_API_KEY;
 
   if (!baseUrl || !apiKey) {
     throw new Error(
-      "XENTRAL_BASE_URL and XENTRAL_API_KEY must be set to fetch orders from Xentral"
+      "XENTRAL_API_URL and XENTRAL_API_KEY must be set to fetch orders from Xentral"
     );
   }
 

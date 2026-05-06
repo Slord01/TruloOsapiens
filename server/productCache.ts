@@ -31,7 +31,7 @@ const state: ProductCacheState = {
  * Requires XENTRAL_BASE_URL and XENTRAL_API_KEY env vars.
  */
 export async function refreshProductCache(): Promise<{ count: number; error?: string }> {
-  const baseUrl = process.env.XENTRAL_BASE_URL;
+  const baseUrl = process.env.XENTRAL_API_URL ?? process.env.XENTRAL_BASE_URL;
   const apiKey = process.env.XENTRAL_API_KEY;
 
   if (!baseUrl || !apiKey) {
