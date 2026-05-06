@@ -44,10 +44,12 @@ export async function fetchAndProcessDeliveryNotes(
   // Ensure product cache is loaded so tobacco filter works
   await refreshProductCache();
 
-  // Build date filter — Xentral V3 uses YYYY-MM-DD for createdAt
+  // Build date filter — Xentral V3 createdAt requires full datetime: Y-m-d\TH:i:sP
   const since = new Date();
   since.setDate(since.getDate() - lookbackDays);
-  const sinceStr = since.toISOString().split("T")[0];
+  since.setHours(0, 0, 0, 0);
+  // Format as ISO 8601 with timezone offset: 2026-04-29T00:00:00+00:00
+  const sinceStr = since.toISOString().replace(/\.\d{3}Z$/, "+00:00");
 
   // Build the V3 list URL with correct filter syntax
   // GET /api/v3/deliveryNotes?filter[0][key]=createdAt&filter[0][op]=greaterThanOrEquals&filter[0][value]=YYYY-MM-DD
