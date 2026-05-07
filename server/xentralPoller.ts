@@ -100,32 +100,33 @@ async function fetchNoteDetail(
           };
         });
 
-      // Try to load free fields for EOID — best effort, 5 s timeout
+      // Fetch EOID from Xentral V1 address record (freifeld5 = ADRESSE_FREIFELD5)
+      // The EOID is stored in the 5th free field of the customer address in Xentral.
       let freeFields: Array<{ name?: string; value?: string }> = [];
       if (addressId) {
         try {
-          const ffResp = await fetchWithTimeout(
-            `${baseUrl}/api/v1/addresses/${addressId}/freefields`,
+          const addrResp = await fetchWithTimeout(
+            `${baseUrl}/api/v1/adressen/${addressId}`,
             { headers },
             5_000
           );
-          if (ffResp.ok) {
-            const ffData = (await ffResp.json()) as {
-              data?: Array<{ name?: string; value?: string }>;
-            };
-            freeFields = ffData?.data ?? [];
-            // Debug: log actual free field names so we can verify the EOID field name
-            if (freeFields.length > 0) {
-              console.log(
-                `[Poller] Free fields for address ${addressId}:`,
-                freeFields.map((f) => `"${f.name}"="${f.value}"`).join(", ")
-              );
+          if (addrResp.ok) {
+            const addrData = (await addrResp.json()) as { data?: Record<string, unknown> };
+            const addrRecord = addrData?.data ?? addrData as Record<string, unknown>;
+            // freifeld5 is the raw field name for ADRESSE_FREIFELD5
+            const eoidValue = String(
+              addrRecord?.freifeld5 ?? addrRecord?.FREIFELD5 ?? addrRecord?.adresse_freifeld5 ?? ""
+            ).trim();
+            if (eoidValue) {
+              // Normalise into the freeFields array shape that dataMapper expects
+              freeFields = [{ name: "EOID Nummer", value: eoidValue }];
+              console.log(`[Poller] EOID from freifeld5 for address ${addressId}: "${eoidValue}"`);
             } else {
-              console.log(`[Poller] No free fields found for address ${addressId}`);
+              console.log(`[Poller] freifeld5 empty for address ${addressId} — EOID will be missing`);
             }
           }
         } catch {
-          // Free fields unavailable — EOID will be missing, mapping will flag it
+          // Address lookup unavailable — EOID will be missing, mapping will flag it
         }
       }
 
