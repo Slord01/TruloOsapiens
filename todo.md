@@ -42,3 +42,22 @@
 - [x] Keep product cache refresh as a small secondary icon button
 - [x] Show count of newly imported orders in toast after fetch
 - [x] Update Vitest tests for the new poller logic
+
+## Phase 6 — EOID Fix & Order Filtering
+
+- [ ] Check dataMapper.ts for the exact free field name being looked up for EOID
+- [ ] Add debug logging to capture actual free field names from Xentral API response
+- [ ] Fix EOID free field name lookup to match actual Xentral field name
+- [ ] Hide orders with "Missing EOID" error from the default All/Ready/Pending views (only visible in Error tab)
+- [ ] Ensure the Error tab still shows them with a clear explanation
+
+## Phase 7 — Order Management (Delete)
+
+- [x] Add deleteDeliveryNote(id) DB helper in db.ts
+- [x] Add bulkDeleteByStatus(status) DB helper in db.ts
+- [x] Add tRPC procedure: orders.delete (admin only, single order)
+- [x] Add tRPC procedure: orders.bulkDelete (admin only, by status filter)
+- [x] Add individual delete button on each order card in Orders.tsx
+- [x] Add "Clear Error Orders" bulk action button in the Error tab header
+- [x] Confirm dialog before bulk delete
+- [x] Update Vitest tests for new procedures

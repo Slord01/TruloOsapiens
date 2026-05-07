@@ -4,7 +4,7 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
-import { listDeliveryNotes, getDeliveryNoteById } from "./db";
+import { listDeliveryNotes, getDeliveryNoteById, deleteDeliveryNote, bulkDeleteDeliveryNotesByStatus } from "./db";
 import { refreshProductCache, getCacheStats } from "./productCache";
 import { retryDeliveryNote } from "./webhookProcessor";
 import { fetchAndProcessDeliveryNotes } from "./xentralPoller";
@@ -113,6 +113,22 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         const result = await fetchAndProcessDeliveryNotes(input.lookbackDays);
         return result;
+      }),
+
+    /** Delete a single delivery note by DB id (admin only). */
+    delete: adminProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        await deleteDeliveryNote(input.id);
+        return { success: true };
+      }),
+
+    /** Bulk-delete all delivery notes with a given status (admin only). */
+    bulkDelete: adminProcedure
+      .input(z.object({ status: z.enum(["pending", "ready", "error"]) }))
+      .mutation(async ({ input }) => {
+        const count = await bulkDeleteDeliveryNotesByStatus(input.status);
+        return { deleted: count };
       }),
   }),
 

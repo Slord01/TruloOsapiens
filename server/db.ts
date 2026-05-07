@@ -163,6 +163,34 @@ export async function listDeliveryNotes(opts: {
   return { notes, total: Number(countResult[0]?.count ?? 0) };
 }
 
+export async function deleteDeliveryNote(id: number) {
+  const db = await getDb();
+  if (!db) return;
+  // Delete child items first (FK), then the note
+  await db.delete(deliveryNoteItems).where(eq(deliveryNoteItems.deliveryNoteId, id));
+  await db.delete(deliveryNotes).where(eq(deliveryNotes.id, id));
+}
+
+export async function bulkDeleteDeliveryNotesByStatus(
+  status: "pending" | "ready" | "error"
+): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  // Collect IDs first so we can delete child items
+  const toDelete = await db
+    .select({ id: deliveryNotes.id })
+    .from(deliveryNotes)
+    .where(eq(deliveryNotes.status, status));
+  if (toDelete.length === 0) return 0;
+  const ids = toDelete.map((r) => r.id);
+  // Delete items for all matching notes, then the notes themselves
+  for (const id of ids) {
+    await db.delete(deliveryNoteItems).where(eq(deliveryNoteItems.deliveryNoteId, id));
+  }
+  await db.delete(deliveryNotes).where(eq(deliveryNotes.status, status));
+  return ids.length;
+}
+
 export async function updateDeliveryNoteStatus(
   id: number,
   update: {

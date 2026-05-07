@@ -92,6 +92,12 @@ async function fetchNoteDetail(
               data?: Array<{ name?: string; value?: string }>;
             };
             freeFields = ffData?.data ?? [];
+            // Debug: log actual free field names so we can verify the EOID field name
+            if (freeFields.length > 0) {
+              console.log(`[Poller] Free fields for address ${addressId}:`, freeFields.map(f => `"${f.name}"="${f.value}"`).join(", "));
+            } else {
+              console.log(`[Poller] No free fields found for address ${addressId}`);
+            }
           }
         } catch {
           // Free fields unavailable — EOID will be missing, mapping will flag it

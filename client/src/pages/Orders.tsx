@@ -4,6 +4,17 @@ import { trpc } from "@/lib/trpc";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import {
   RefreshCw,
@@ -15,6 +26,7 @@ import {
   Clock,
   Download,
   Database,
+  Trash2,
 } from "lucide-react";
 
 const PAGE_SIZE = 20;
@@ -27,7 +39,6 @@ export default function Orders() {
   const [searchInput, setSearchInput] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [lookbackDays] = useState(7);
-
   const utils = trpc.useUtils();
 
   const { data, isLoading } = trpc.orders.list.useQuery({
@@ -73,6 +84,26 @@ export default function Orders() {
     },
     onError: (err) => {
       toast.error(`Product sync failed: ${err.message}`);
+    },
+  });
+
+  // Delete a single order
+  const deleteMutation = trpc.orders.delete.useMutation({
+    onSuccess: () => {
+      utils.orders.list.invalidate();
+      toast.success("Order removed");
+    },
+    onError: (err) => toast.error(`Delete failed: ${err.message}`),
+  });
+
+  // Bulk delete all error orders
+  const bulkDeleteMutation = trpc.orders.bulkDelete.useMutation({
+    onSuccess: (result) => {
+      utils.orders.list.invalidate();
+      toast.success(`Removed ${result.deleted} error order${result.deleted !== 1 ? "s" : ""}`);
+    },
+    onError: (err) => {
+      toast.error(`Bulk delete failed: ${err.message}`);
     },
   });
 
@@ -163,7 +194,7 @@ export default function Orders() {
           </Button>
         </form>
 
-        {/* Status Tabs + count */}
+        {/* Status Tabs + count + bulk actions */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex gap-1 p-1 bg-card rounded-xl border border-border w-fit">
             {statusTabs.map((tab) => (
@@ -180,11 +211,49 @@ export default function Orders() {
               </button>
             ))}
           </div>
-          {data && (
-            <p className="text-xs text-muted-foreground">
-              {data.total} order{data.total !== 1 ? "s" : ""}
-            </p>
-          )}
+
+          <div className="flex items-center gap-2">
+            {data && (
+              <p className="text-xs text-muted-foreground">
+                {data.total} order{data.total !== 1 ? "s" : ""}
+              </p>
+            )}
+            {/* Bulk clear — only shown on Error tab when there are error orders */}
+            {statusFilter === "error" && data && data.total > 0 && (
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 px-2 text-xs text-[oklch(0.62_0.22_25)] hover:bg-[oklch(0.18_0.06_25)] gap-1"
+                    disabled={bulkDeleteMutation.isPending}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                    {bulkDeleteMutation.isPending ? "Deleting…" : "Clear all errors"}
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Clear all error orders?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This will permanently remove all {data.total} error order{data.total !== 1 ? "s" : ""} from the database.
+                      Orders that are missing EOID or have other mapping errors will be deleted.
+                      This action cannot be undone — you can re-fetch them from Xentral at any time.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      onClick={() => bulkDeleteMutation.mutate({ status: "error" })}
+                    >
+                      Delete {data.total} order{data.total !== 1 ? "s" : ""}
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            )}
+          </div>
         </div>
 
         {/* Order List */}
@@ -208,56 +277,74 @@ export default function Orders() {
         ) : (
           <div className="space-y-2">
             {data?.notes.map((note) => (
-              <button
+              <div
                 key={note.id}
-                onClick={() => navigate(`/orders/${note.id}`)}
-                className="w-full text-left rounded-xl border border-border bg-card hover:bg-accent/40 hover:border-primary/40 transition-all duration-150 p-4 flex items-center gap-4 group"
+                className="relative rounded-xl border border-border bg-card hover:bg-accent/40 hover:border-primary/40 transition-all duration-150 group"
               >
-                <div
-                  className={`h-10 w-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                    note.status === "ready"
-                      ? "bg-[oklch(0.20_0.06_145)]"
-                      : note.status === "error"
-                      ? "bg-[oklch(0.18_0.06_25)]"
-                      : "bg-[oklch(0.20_0.05_75)]"
-                  }`}
+                {/* Clickable row navigates to detail */}
+                <button
+                  onClick={() => navigate(`/orders/${note.id}`)}
+                  className="w-full text-left p-4 flex items-center gap-4 pr-10"
                 >
-                  {note.status === "ready" ? (
-                    <QrCode className="h-5 w-5 text-[oklch(0.65_0.18_145)]" />
-                  ) : note.status === "error" ? (
-                    <AlertCircle className="h-5 w-5 text-[oklch(0.62_0.22_25)]" />
-                  ) : (
-                    <Clock className="h-5 w-5 text-[oklch(0.72_0.14_75)]" />
-                  )}
-                </div>
-
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-semibold text-foreground text-sm">
-                      {note.xentralNumber || `#${note.id}`}
-                    </span>
-                    <StatusBadge status={note.status as "ready" | "error" | "pending"} />
-                  </div>
-                  <p className="text-sm text-muted-foreground truncate mt-0.5">
-                    {note.customerName || "Unknown customer"}
-                    {note.eoid && (
-                      <span className="ml-2 text-xs opacity-60">EOID: {note.eoid}</span>
+                  <div
+                    className={`h-10 w-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                      note.status === "ready"
+                        ? "bg-[oklch(0.20_0.06_145)]"
+                        : note.status === "error"
+                        ? "bg-[oklch(0.18_0.06_25)]"
+                        : "bg-[oklch(0.20_0.05_75)]"
+                    }`}
+                  >
+                    {note.status === "ready" ? (
+                      <QrCode className="h-5 w-5 text-[oklch(0.65_0.18_145)]" />
+                    ) : note.status === "error" ? (
+                      <AlertCircle className="h-5 w-5 text-[oklch(0.62_0.22_25)]" />
+                    ) : (
+                      <Clock className="h-5 w-5 text-[oklch(0.72_0.14_75)]" />
                     )}
-                  </p>
-                  {note.status === "error" && note.errorMessage && (
-                    <p className="text-xs text-[oklch(0.62_0.22_25)] mt-0.5 truncate">
-                      {note.errorMessage}
-                    </p>
-                  )}
-                </div>
+                  </div>
 
-                <div className="flex-shrink-0 flex flex-col items-end gap-1">
-                  {note.deliveryDate && (
-                    <span className="text-xs text-muted-foreground">{note.deliveryDate}</span>
-                  )}
-                  <ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors" />
-                </div>
-              </button>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-foreground text-sm">
+                        {note.xentralNumber || `#${note.id}`}
+                      </span>
+                      <StatusBadge status={note.status as "ready" | "error" | "pending"} />
+                    </div>
+                    <p className="text-sm text-muted-foreground truncate mt-0.5">
+                      {note.customerName || "Unknown customer"}
+                      {note.eoid && (
+                        <span className="ml-2 text-xs opacity-60">EOID: {note.eoid}</span>
+                      )}
+                    </p>
+                    {note.status === "error" && note.errorMessage && (
+                      <p className="text-xs text-[oklch(0.62_0.22_25)] mt-0.5 truncate">
+                        {note.errorMessage}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="flex-shrink-0 flex flex-col items-end gap-1">
+                    {note.deliveryDate && (
+                      <span className="text-xs text-muted-foreground">{note.deliveryDate}</span>
+                    )}
+                    <ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors" />
+                  </div>
+                </button>
+
+                {/* Per-row delete button — appears on hover */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    deleteMutation.mutate({ id: note.id });
+                  }}
+                  disabled={deleteMutation.isPending && deleteMutation.variables?.id === note.id}
+                  className="absolute top-1/2 -translate-y-1/2 right-3 opacity-0 group-hover:opacity-100 transition-opacity h-7 w-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-[oklch(0.62_0.22_25)] hover:bg-[oklch(0.18_0.06_25)]"
+                  title="Remove this order"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
             ))}
           </div>
         )}
