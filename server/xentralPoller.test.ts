@@ -19,6 +19,8 @@ vi.mock("./webhookProcessor", () => ({
 
 vi.mock("./productCache", () => ({
   refreshProductCache: vi.fn().mockResolvedValue({ count: 5, error: null }),
+  isTobaccoProduct: (_id: string) => false, // rely on SKU prefix check in tests
+  isTobaccoProductNumber: (num: string) => num.startsWith("95"),
 }));
 
 vi.mock("./db", () => ({
@@ -70,6 +72,18 @@ const sampleV3Note = {
     zipCode: "10115",
     country: "DE",
   },
+  // lineItems with a realistic tobacco SKU (Category 95000, e.g. 95001)
+  lineItems: [
+    {
+      type: "product",
+      id: "li-1",
+      number: "95001",
+      name: "Cigarettes 20er",
+      quantity: 50,
+      unit: "Stk",
+      product: { id: "prod-001", number: "95001", name: "Cigarettes 20er", ean: "4012345678901" },
+    },
+  ],
 };
 
 const sampleV1Detail = {
@@ -161,8 +175,9 @@ describe("fetchAndProcessDeliveryNotes", () => {
       if (urlStr.includes("/api/v3/deliveryNotes") && !urlStr.includes("/42")) {
         return makeV3ListResponse([sampleV3Note]) as unknown as Response;
       }
-      if (urlStr.includes("/api/v1/deliverynotes/42")) {
-        return makeV1DetailResponse(sampleV1Detail) as unknown as Response;
+      // V3 detail returns note with lineItems (tobacco SKU)
+      if (urlStr.includes("/api/v3/deliveryNotes/42")) {
+        return makeV1DetailResponse(sampleV3Note) as unknown as Response;
       }
       return makeErrorResponse(404, "Not Found") as unknown as Response;
     });
@@ -171,12 +186,13 @@ describe("fetchAndProcessDeliveryNotes", () => {
 
     expect(result.imported).toBe(1); // newly inserted
     expect(result.errors).toBe(0);
+    expect(result.tobaccoFound).toBe(1);
     expect(result.details[0].isNew).toBe(true);
   });
 
   it("does NOT increment imported for already-existing records", async () => {
-    // Simulate record already in DB
-    vi.mocked(getDeliveryNoteByXentralId).mockResolvedValue({ id: 1 } as never);
+    // Simulate record already in DB with status 'error' (not 'ready') so it gets re-processed
+    vi.mocked(getDeliveryNoteByXentralId).mockResolvedValue({ id: 1, status: "error" } as never);
     vi.mocked(processWebhookPayload).mockResolvedValue({ id: 1, status: "ready" });
 
     vi.spyOn(global, "fetch").mockImplementation(async (url) => {
@@ -184,8 +200,8 @@ describe("fetchAndProcessDeliveryNotes", () => {
       if (urlStr.includes("/api/v3/deliveryNotes") && !urlStr.includes("/42")) {
         return makeV3ListResponse([sampleV3Note]) as unknown as Response;
       }
-      if (urlStr.includes("/api/v1/deliverynotes/42")) {
-        return makeV1DetailResponse(sampleV1Detail) as unknown as Response;
+      if (urlStr.includes("/api/v3/deliveryNotes/42")) {
+        return makeV1DetailResponse(sampleV3Note) as unknown as Response;
       }
       return makeErrorResponse(404, "Not Found") as unknown as Response;
     });
@@ -194,6 +210,7 @@ describe("fetchAndProcessDeliveryNotes", () => {
 
     expect(result.imported).toBe(0); // already existed — not counted as new
     expect(result.fetched).toBe(1);
+    expect(result.tobaccoFound).toBe(1);
     expect(result.details[0].isNew).toBe(false);
   });
 
@@ -230,8 +247,8 @@ describe("fetchAndProcessDeliveryNotes", () => {
       if (urlStr.includes("/api/v3/deliveryNotes") && !urlStr.includes("/42")) {
         return makeV3ListResponse([sampleV3Note]) as unknown as Response;
       }
-      if (urlStr.includes("/api/v1/deliverynotes/42")) {
-        return makeV1DetailResponse(sampleV1Detail) as unknown as Response;
+      if (urlStr.includes("/api/v3/deliveryNotes/42")) {
+        return makeV1DetailResponse(sampleV3Note) as unknown as Response;
       }
       return makeErrorResponse(404, "Not Found") as unknown as Response;
     });

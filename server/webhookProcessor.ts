@@ -8,6 +8,7 @@
  */
 import {
   isTobaccoProduct,
+  isTobaccoProductNumber,
   refreshProductCache,
   getCacheStats,
   type CachedProduct,
@@ -40,14 +41,14 @@ async function ensureCacheLoaded() {
  * If the cache is empty (no Xentral credentials), all positions pass through.
  */
 function filterTobaccoPositions(positions: XentralPosition[]): XentralPosition[] {
-  const stats = getCacheStats();
-  // If cache has never been loaded or has 0 products (no API key), pass all through
-  if (!stats.lastRefreshed || stats.count === 0) {
-    return positions;
-  }
   return positions.filter((pos) => {
+    // Primary check: product number (SKU) starts with "95" — works without cache
+    const productNumber = String(pos.product?.number ?? "");
+    if (productNumber && isTobaccoProductNumber(productNumber)) return true;
+    // Secondary check: product ID is in the Category 95000 cache
     const productId = String(pos.product?.id ?? "");
-    return productId ? isTobaccoProduct(productId) : false;
+    if (productId && isTobaccoProduct(productId)) return true;
+    return false;
   });
 }
 
@@ -76,7 +77,7 @@ export async function processWebhookPayload(raw: unknown): Promise<{ id: number;
 
   const payload = raw as XentralDeliveryNotePayload;
   const xentralId = String(payload.id ?? payload.deliveryNoteId ?? "");
-  const xentralNumber = String(payload.number ?? payload.deliveryNoteNumber ?? xentralId);
+  const xentralNumber = String(payload.documentNumber ?? payload.number ?? payload.deliveryNoteNumber ?? xentralId);
   const deliveryDate = String(payload.date ?? new Date().toISOString().split("T")[0]);
 
   // Upsert a pending record first so we always have a DB row

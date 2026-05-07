@@ -3,21 +3,29 @@
  * Actively fetches delivery notes from the Xentral V3 REST API and processes
  * each one through the existing webhook pipeline.
  *
- * API reference: https://developer.xentral.com/reference/getapi-v3-deliverynotes
- * Filter syntax:  filter[n][key] / filter[n][op] / filter[n][value]
- * Endpoint:       GET /api/v3/deliveryNotes
+ * Strategy:
+ * 1. Fetch the list of recent delivery notes from V3 (date filter).
+ * 2. For each note, fetch the V3 detail which includes lineItems with product IDs.
+ * 3. Check if ANY line item product ID is in the tobacco cache (Category 95000).
+ *    → If no tobacco products found: skip entirely (never write to DB).
+ *    → If already in DB as "ready": skip (no re-processing needed).
+ * 4. For tobacco notes only: fetch free fields for EOID, then run full pipeline.
  *
- * Used by the "Fetch Orders" admin button so warehouse staff can pull orders
- * on demand without waiting for Xentral webhooks to be configured.
+ * This means the DB only ever contains tobacco delivery notes, and repeat
+ * fetches are near-instant for already-processed notes.
+ *
+ * API reference: https://developer.xentral.com/reference/getapi-v3-deliverynotes
  */
 
 import { processWebhookPayload } from "./webhookProcessor";
-import { refreshProductCache } from "./productCache";
+import { refreshProductCache, isTobaccoProduct, isTobaccoProductNumber } from "./productCache";
 import { getDeliveryNoteByXentralId } from "./db";
 
 export interface PollResult {
   fetched: number;
-  /** Number of delivery notes that were newly inserted (not previously in DB) */
+  /** Tobacco notes found (before DB check) */
+  tobaccoFound: number;
+  /** Newly inserted or updated records */
   imported: number;
   errors: number;
   skipped: number;
@@ -40,9 +48,8 @@ async function fetchWithTimeout(
 }
 
 /**
- * Fetch the full detail for a single delivery note.
- * Tries V1 first (includes positions + customer free fields / EOID).
- * Falls back to V3 detail + separate free fields call if V1 fails.
+ * Fetch the V3 detail for a delivery note, remap to the shape expected by
+ * processWebhookPayload, and include free fields for EOID lookup.
  */
 async function fetchNoteDetail(
   baseUrl: string,
@@ -50,21 +57,7 @@ async function fetchNoteDetail(
   listNote: Record<string, unknown>,
   headers: Record<string, string>
 ): Promise<Record<string, unknown>> {
-  // V1 detail includes positions and customer free fields (EOID lives here)
-  try {
-    const v1Response = await fetchWithTimeout(
-      `${baseUrl}/api/v1/deliverynotes/${id}`,
-      { headers }
-    );
-    if (v1Response.ok) {
-      const v1Data = (await v1Response.json()) as { data?: unknown };
-      return (v1Data?.data ?? v1Data) as Record<string, unknown>;
-    }
-  } catch {
-    // V1 timed out or failed — fall through to V3
-  }
-
-  // V3 detail fallback — remap documentAddress → customer.address shape
+  // V3 detail includes lineItems with product IDs — primary source
   try {
     const v3Response = await fetchWithTimeout(
       `${baseUrl}/api/v3/deliveryNotes/${id}`,
@@ -77,6 +70,29 @@ async function fetchNoteDetail(
       const addressId = String(
         (v3Note.address as Record<string, unknown> | undefined)?.id ?? ""
       );
+
+      // Remap V3 lineItems → positions shape expected by dataMapper
+      const lineItems = (v3Note.lineItems as unknown[]) ?? [];
+      const positions = lineItems
+        .filter((li) => {
+          const item = li as Record<string, unknown>;
+          return item.type === "product";
+        })
+        .map((li) => {
+          const item = li as Record<string, unknown>;
+          const prod = item.product as Record<string, unknown> | undefined;
+          return {
+            product: {
+              id: String(prod?.id ?? ""),
+              number: String(item.number ?? prod?.number ?? ""),
+              name: String(item.name ?? prod?.name ?? ""),
+              ean: prod?.ean ? String(prod.ean) : undefined,
+            },
+            quantity: item.quantity,
+            unit: item.unit,
+            price: undefined,
+          };
+        });
 
       // Try to load free fields for EOID — best effort, 5 s timeout
       let freeFields: Array<{ name?: string; value?: string }> = [];
@@ -94,7 +110,10 @@ async function fetchNoteDetail(
             freeFields = ffData?.data ?? [];
             // Debug: log actual free field names so we can verify the EOID field name
             if (freeFields.length > 0) {
-              console.log(`[Poller] Free fields for address ${addressId}:`, freeFields.map(f => `"${f.name}"="${f.value}"`).join(", "));
+              console.log(
+                `[Poller] Free fields for address ${addressId}:`,
+                freeFields.map((f) => `"${f.name}"="${f.value}"`).join(", ")
+              );
             } else {
               console.log(`[Poller] No free fields found for address ${addressId}`);
             }
@@ -107,8 +126,10 @@ async function fetchNoteDetail(
       return {
         ...v3Note,
         id: v3Note.id,
+        documentNumber: v3Note.documentNumber,
         number: v3Note.documentNumber,
         date: v3Note.documentDate,
+        positions,
         customer: {
           id: addressId,
           name: docAddr?.name ?? docAddr?.contactPerson ?? "",
@@ -124,13 +145,14 @@ async function fetchNoteDetail(
       };
     }
   } catch {
-    // V3 also timed out — use list-level data as last resort
+    // V3 timed out or failed — use list-level data as last resort
   }
 
   // Last resort: list-level data only (mapping will likely produce an error record)
   return {
     ...listNote,
     id: listNote.id,
+    documentNumber: listNote.documentNumber ?? listNote.number,
     number: listNote.documentNumber ?? listNote.number,
     date: listNote.documentDate ?? listNote.date,
   };
@@ -138,6 +160,7 @@ async function fetchNoteDetail(
 
 /**
  * Fetch delivery notes from Xentral created in the last `lookbackDays` days.
+ * Only tobacco notes (Category 95000) are processed and saved to the database.
  * Notes are processed in parallel (up to CONCURRENCY at a time) with per-call
  * timeouts so the operation completes quickly even with many records.
  */
@@ -189,6 +212,7 @@ export async function fetchAndProcessDeliveryNotes(
 
   const result: PollResult = {
     fetched: rawNotes.length,
+    tobaccoFound: 0,
     imported: 0,
     errors: 0,
     skipped: 0,
@@ -205,13 +229,43 @@ export async function fetchAndProcessDeliveryNotes(
     const id = String(note.id ?? "");
     const number = String(note.documentNumber ?? note.number ?? id);
 
-    const existing = await getDeliveryNoteByXentralId(id).catch(() => null);
-    const isNew = !existing;
-
     try {
+      // Fetch V3 detail — this gives us lineItems with product IDs
       const fullNote = await fetchNoteDetail(baseUrl!, id, note, headers);
-      const processed = await processWebhookPayload(fullNote);
 
+      // Pre-filter: check if any position is a tobacco product
+      // Uses SKU prefix "95" as primary check (works without cache),
+      // and Category 95000 cache as secondary check.
+      const positions = (fullNote.positions as Array<Record<string, unknown>>) ?? [];
+      const hasTobacco = positions.some((pos) => {
+        const prod = pos.product as Record<string, unknown> | undefined;
+        const productNumber = String(prod?.number ?? "");
+        if (productNumber && isTobaccoProductNumber(productNumber)) return true;
+        const productId = String(prod?.id ?? "");
+        if (productId && isTobaccoProduct(productId)) return true;
+        return false;
+      });
+
+      if (!hasTobacco) {
+        // Not a tobacco order — skip silently, do not write to DB
+        result.skipped++;
+        return;
+      }
+
+      result.tobaccoFound++;
+
+      // Check if already in DB as "ready" — skip re-processing
+      const existing = await getDeliveryNoteByXentralId(id).catch(() => null);
+      const isNew = !existing;
+
+      if (existing?.status === "ready") {
+        // Already successfully processed — count as skipped, not an error
+        result.skipped++;
+        result.details.push({ id, number, status: "ready", isNew: false });
+        return;
+      }
+
+      const processed = await processWebhookPayload(fullNote);
       result.details.push({ id, number, status: processed.status, isNew });
 
       if (processed.status === "ready") {
@@ -223,7 +277,7 @@ export async function fetchAndProcessDeliveryNotes(
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      result.details.push({ id, number, status: "error", isNew, error: msg });
+      result.details.push({ id, number, status: "error", isNew: true, error: msg });
       result.errors++;
       console.error(`[Poller] Failed to process delivery note ${id}:`, err);
     }
@@ -233,6 +287,85 @@ export async function fetchAndProcessDeliveryNotes(
   for (let i = 0; i < rawNotes.length; i += CONCURRENCY) {
     const batch = rawNotes.slice(i, i + CONCURRENCY);
     await Promise.all(batch.map(processOne));
+  }
+
+  return result;
+}
+
+/**
+ * Fetch a single delivery note by its Xentral document number (e.g. LN-2026-00123).
+ * Uses the documentNumber filter on the V3 list endpoint to find the exact note.
+ */
+export async function fetchDeliveryNoteByDocumentNumber(
+  documentNumber: string
+): Promise<PollResult> {
+  const baseUrl = (process.env.XENTRAL_API_URL ?? process.env.XENTRAL_BASE_URL)?.replace(/\/$/, "");
+  const apiKey = process.env.XENTRAL_API_KEY;
+
+  if (!baseUrl || !apiKey) {
+    throw new Error(
+      "XENTRAL_API_URL and XENTRAL_API_KEY must be set to fetch orders from Xentral"
+    );
+  }
+
+  await refreshProductCache();
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${apiKey}`,
+    Accept: "application/json",
+  };
+
+  const url = new URL(`${baseUrl}/api/v3/deliveryNotes`);
+  url.searchParams.set("filter[0][key]", "documentNumber");
+  url.searchParams.set("filter[0][op]", "equals");
+  url.searchParams.set("filter[0][value]", documentNumber.trim());
+
+  const listResponse = await fetchWithTimeout(url.toString(), { headers }, 15_000);
+
+  if (!listResponse.ok) {
+    const body = await listResponse.text().catch(() => "");
+    throw new Error(
+      `Xentral API error ${listResponse.status} ${listResponse.statusText} — ${body.slice(0, 300)}`
+    );
+  }
+
+  const listData = (await listResponse.json()) as { data?: unknown[] };
+  const rawNotes: unknown[] = listData?.data ?? [];
+
+  const result: PollResult = {
+    fetched: rawNotes.length,
+    tobaccoFound: 0,
+    imported: 0,
+    errors: 0,
+    skipped: 0,
+    details: [],
+  };
+
+  if (rawNotes.length === 0) return result;
+
+  // Process the single matched note (or the few returned)
+  for (const raw of rawNotes) {
+    const note = raw as Record<string, unknown>;
+    const id = String(note.id ?? "");
+    const number = String(note.documentNumber ?? note.number ?? id);
+
+    try {
+      const fullNote = await fetchNoteDetail(baseUrl, id, note, headers);
+      result.tobaccoFound++;
+      const existing = await getDeliveryNoteByXentralId(id).catch(() => null);
+      const isNew = !existing;
+      const processed = await processWebhookPayload(fullNote);
+      result.details.push({ id, number, status: processed.status, isNew });
+      if (processed.status === "ready") {
+        if (isNew) result.imported++;
+      } else if (processed.status === "error") {
+        result.errors++;
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      result.details.push({ id, number, status: "error", isNew: true, error: msg });
+      result.errors++;
+    }
   }
 
   return result;

@@ -39,6 +39,7 @@ export default function Orders() {
   const [searchInput, setSearchInput] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [lookbackDays] = useState(7);
+  const [docNumberInput, setDocNumberInput] = useState("");
   const utils = trpc.useUtils();
 
   const { data, isLoading } = trpc.orders.list.useQuery({
@@ -48,6 +49,24 @@ export default function Orders() {
     search: search || undefined,
   });
 
+  // Fetch a single delivery note by document number
+  const fetchByDocMutation = trpc.orders.fetchByDocumentNumber.useMutation({
+    onSuccess: (result) => {
+      utils.orders.list.invalidate();
+      setDocNumberInput("");
+      if (result.fetched === 0) {
+        toast.error(`No delivery note found with that document number`);
+      } else if (result.errors > 0) {
+        toast.warning(`Fetched — check order for errors`);
+      } else {
+        toast.success(`Order fetched successfully`);
+      }
+    },
+    onError: (err) => {
+      toast.error(`Fetch failed: ${err.message}`);
+    },
+  });
+
   // Primary action: fetch delivery notes from Xentral API
   const fetchMutation = trpc.orders.fetchFromXentral.useMutation({
     onSuccess: (result) => {
@@ -55,19 +74,23 @@ export default function Orders() {
       if (result.fetched === 0) {
         toast.info(`No delivery notes found in the last ${lookbackDays} days`);
       } else {
+        const tobaccoCount = result.tobaccoFound ?? 0;
         const readyCount = result.imported;
         const errorCount = result.errors;
-        if (readyCount > 0 && errorCount === 0) {
+        const skippedCount = result.skipped;
+        if (tobaccoCount === 0) {
+          toast.info(`Scanned ${result.fetched} delivery note${result.fetched !== 1 ? "s" : ""} — no tobacco orders found`);
+        } else if (readyCount > 0 && errorCount === 0) {
           toast.success(
-            `Fetched ${result.fetched} delivery note${result.fetched !== 1 ? "s" : ""} — ${readyCount} ready`
+            `${tobaccoCount} tobacco order${tobaccoCount !== 1 ? "s" : ""} found — ${readyCount} ready${skippedCount > 0 ? `, ${skippedCount} already processed` : ""}`
           );
         } else if (readyCount > 0 && errorCount > 0) {
           toast.warning(
-            `Fetched ${result.fetched} — ${readyCount} ready, ${errorCount} with errors`
+            `${tobaccoCount} tobacco order${tobaccoCount !== 1 ? "s" : ""} — ${readyCount} ready, ${errorCount} with errors`
           );
         } else {
           toast.error(
-            `Fetched ${result.fetched} delivery note${result.fetched !== 1 ? "s" : ""} — ${errorCount} error${errorCount !== 1 ? "s" : ""} (check order details)`
+            `${tobaccoCount} tobacco order${tobaccoCount !== 1 ? "s" : ""} — ${errorCount} error${errorCount !== 1 ? "s" : ""} (check order details)`
           );
         }
       }
@@ -163,6 +186,39 @@ export default function Orders() {
               <span className="hidden md:inline text-xs">Sync Products</span>
             </Button>
 
+            {/* Document number quick-fetch input */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (docNumberInput.trim()) {
+                  fetchByDocMutation.mutate({ documentNumber: docNumberInput.trim() });
+                }
+              }}
+              className="hidden md:flex items-center gap-1.5"
+            >
+              <Input
+                placeholder="Doc number…"
+                value={docNumberInput}
+                onChange={(e) => setDocNumberInput(e.target.value)}
+                className="h-8 w-36 text-xs bg-card border-border text-foreground placeholder:text-muted-foreground"
+                disabled={fetchByDocMutation.isPending}
+              />
+              <Button
+                type="submit"
+                size="sm"
+                variant="outline"
+                disabled={!docNumberInput.trim() || fetchByDocMutation.isPending}
+                className="h-8 px-2 border-border text-foreground hover:bg-accent"
+                title="Fetch this specific delivery note from Xentral"
+              >
+                {fetchByDocMutation.isPending ? (
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Download className="h-3.5 w-3.5" />
+                )}
+              </Button>
+            </form>
+
             {/* Primary: Fetch Orders from Xentral */}
             <Button
               size="sm"
@@ -171,7 +227,7 @@ export default function Orders() {
               className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90"
             >
               <Download className={`h-3.5 w-3.5 ${fetchMutation.isPending ? "animate-bounce" : ""}`} />
-              {fetchMutation.isPending ? "Fetching\u2026" : "Fetch Orders"}
+              {fetchMutation.isPending ? "Fetching…" : "Fetch Orders"}
             </Button>
           </div>
         </div>

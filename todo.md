@@ -61,3 +61,27 @@
 - [x] Add "Clear Error Orders" bulk action button in the Error tab header
 - [x] Confirm dialog before bulk delete
 - [x] Update Vitest tests for new procedures
+
+## Phase 8 — Order Number Fix & Smarter Fetch
+
+- [ ] Fix xentralNumber: store documentNumber (e.g. "LN-2026-00123") not the internal Xentral ID
+- [ ] Add salesOrderNumber field to schema to store the linked sales order document number
+- [ ] Add "Fetch by document number" input to Orders page header so user can fetch a specific delivery note by its Xentral document number
+- [ ] Also add option to skip already-fetched notes (only fetch new ones) to speed up bulk fetch
+- [ ] Update UI labels: show both delivery note number and sales order number where available
+
+## Phase 9 — Tobacco Pre-Filter & Performance
+
+- [ ] At list level, check if positions are included in V3 list response — if yes, filter before fetching detail
+- [ ] If positions not in list response, fetch V3 detail for each note but check positions first before running full mapping pipeline — skip notes with zero tobacco positions
+- [ ] Add skip-already-fetched optimisation: if xentralId already in DB as "ready", skip detail fetch entirely
+- [ ] Fix order number: documentNumber fix already applied in webhookProcessor.ts and dataMapper.ts
+- [ ] Add fetch-by-document-number input to Orders header for targeted single-order fetch
+
+## Phase 10 — SKU Prefix Filter & Document Number Search
+
+- [ ] Update isTobaccoProduct() in productCache.ts to also match product numbers starting with "95"
+- [ ] Update filterTobaccoPositions() in webhookProcessor.ts to use both cache ID check AND SKU prefix "95" check
+- [ ] Update xentralPoller.ts hasTobacco check to use both cache ID AND SKU prefix "95"
+- [ ] Add document number search input to Orders page header for targeted single-order fetch
+- [ ] Update fetch toast messages to show tobaccoFound count

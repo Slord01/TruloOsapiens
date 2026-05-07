@@ -7,7 +7,7 @@ import { TRPCError } from "@trpc/server";
 import { listDeliveryNotes, getDeliveryNoteById, deleteDeliveryNote, bulkDeleteDeliveryNotesByStatus } from "./db";
 import { refreshProductCache, getCacheStats } from "./productCache";
 import { retryDeliveryNote } from "./webhookProcessor";
-import { fetchAndProcessDeliveryNotes } from "./xentralPoller";
+import { fetchAndProcessDeliveryNotes, fetchDeliveryNoteByDocumentNumber } from "./xentralPoller";
 
 // ─── Admin guard ──────────────────────────────────────────────────────────────
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -112,6 +112,17 @@ export const appRouter = router({
       )
       .mutation(async ({ input }) => {
         const result = await fetchAndProcessDeliveryNotes(input.lookbackDays);
+        return result;
+      }),
+
+    /**
+     * Fetch a single delivery note by its Xentral document number (e.g. LN-2026-00123).
+     * Bypasses the date filter — useful for fetching a specific order immediately.
+     */
+    fetchByDocumentNumber: adminProcedure
+      .input(z.object({ documentNumber: z.string().min(1) }))
+      .mutation(async ({ input }) => {
+        const result = await fetchDeliveryNoteByDocumentNumber(input.documentNumber);
         return result;
       }),
 

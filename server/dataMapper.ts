@@ -35,7 +35,11 @@ export interface XentralCustomer {
 export interface XentralDeliveryNotePayload {
   id?: string;
   number?: string;
+  /** V3 API field name for the human-readable document number (e.g. LN-2026-00123) */
+  documentNumber?: string;
   date?: string;
+  /** V3 API field name for the document date */
+  documentDate?: string;
   customer?: XentralCustomer;
   positions?: XentralPosition[];
   // Alternate flat structure some Xentral versions send
@@ -115,8 +119,8 @@ function normalise(raw: XentralDeliveryNotePayload): {
   positions: XentralPosition[];
 } {
   const id = String(raw.id ?? raw.deliveryNoteId ?? "");
-  const number = String(raw.number ?? raw.deliveryNoteNumber ?? "");
-  const date = String(raw.date ?? new Date().toISOString().split("T")[0]);
+  const number = String(raw.documentNumber ?? raw.number ?? raw.deliveryNoteNumber ?? "");
+  const date = String(raw.date ?? raw.documentDate ?? new Date().toISOString().split("T")[0]);
   const customer: XentralCustomer = raw.customer ?? raw.customerData ?? {};
   const positions: XentralPosition[] = raw.positions ?? raw.items ?? [];
   return { id, number, date, customer, positions };

@@ -93,9 +93,18 @@ export async function refreshProductCache(): Promise<{ count: number; error?: st
   }
 }
 
-/** Check whether a product ID belongs to the tobacco category. */
+/** Check whether a product ID belongs to the tobacco category (Category 95000 cache). */
 export function isTobaccoProduct(productId: string): boolean {
   return state.products.has(productId);
+}
+
+/**
+ * Check whether a product number (SKU) belongs to the tobacco category.
+ * Matches products whose article number starts with "95" — the category prefix.
+ * This works independently of the cache and is the primary filter.
+ */
+export function isTobaccoProductNumber(productNumber: string): boolean {
+  return productNumber.startsWith("95");
 }
 
 /** Get cached product details by ID. */
