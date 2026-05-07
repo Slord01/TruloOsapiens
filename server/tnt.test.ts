@@ -19,7 +19,7 @@ const basePayload = {
       zipCode: "10115",
       countryCode: "DE",
     },
-    freeFields: [{ name: "EOID Number", value: "DE12345678901234" }],
+    freeFields: [{ name: "EOID Nummer", value: "DE12345678901234" }],
   },
   positions: [
     {
@@ -78,8 +78,8 @@ describe("mapDeliveryNoteToSalesOrder", () => {
     };
     const result = mapDeliveryNoteToSalesOrder(payloadNoEoid as any, tobaccoPositions as any);
     expect(result.success).toBe(false);
-    expect(result.missingFields).toContain("EOID Number");
-    expect(result.errorMessage).toContain("EOID Number");
+    expect(result.missingFields).toContain("EOID Nummer");
+    expect(result.errorMessage).toContain("EOID Nummer");
     expect(result.salesOrder).toBeUndefined();
   });
 
@@ -113,7 +113,7 @@ describe("mapDeliveryNoteToSalesOrder", () => {
     };
     const result = mapDeliveryNoteToSalesOrder(payloadNoEoid as any, tobaccoPositions as any);
     expect(result.errorMessage).toBe(
-      "Missing EOID Number — please update the customer record in Xentral"
+      "Missing EOID Nummer — please update the customer record in Xentral"
     );
   });
 

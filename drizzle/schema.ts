@@ -32,6 +32,8 @@ export const deliveryNotes = mysqlTable("delivery_notes", {
   xentralId: varchar("xentralId", { length: 128 }).notNull().unique(),
   /** Xentral delivery note number (human-readable, e.g. LN-2026-00123) */
   xentralNumber: varchar("xentralNumber", { length: 128 }).notNull(),
+  /** Linked Xentral sales order number (e.g. 590138) — the reference your team uses day-to-day */
+  salesOrderNumber: varchar("salesOrderNumber", { length: 128 }),
   /** Xentral customer ID */
   customerId: varchar("customerId", { length: 128 }),
   /** Customer company name */

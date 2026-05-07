@@ -15,6 +15,13 @@
       "when": 1778100026929,
       "tag": "0001_wide_matthew_murdock",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1778152262334,
+      "tag": "0002_hard_spencer_smythe",
+      "breakpoints": true
     }
   ]
 }

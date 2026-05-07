@@ -47,6 +47,8 @@ export interface XentralDeliveryNotePayload {
   deliveryNoteId?: string;
   customerData?: XentralCustomer;
   items?: XentralPosition[];
+  /** Sales order reference number (extracted from salesOrder.documentNumber in V3 detail) */
+  salesOrderNumber?: string;
 }
 
 // ─── Osapiens SalesOrder Types ────────────────────────────────────────────────
@@ -94,16 +96,18 @@ export interface MappingResult {
   addressCountry?: string;
 }
 
-const EOID_FIELD_NAME = "EOID Number";
+// The free field name used in Xentral for the EOID — German label as shown on the delivery note PDF
+const EOID_FIELD_NAMES = ["EOID Nummer", "EOID Number", "eoid", "EOID"];
 
 /**
  * Extract EOID from customer free fields array.
- * Matches the exact field name "EOID Number" (case-insensitive trim).
+ * Tries all known EOID field name variants (German and English).
  */
 function extractEoid(freeFields?: Array<{ name?: string; value?: string }>): string | undefined {
   if (!freeFields || !Array.isArray(freeFields)) return undefined;
+  const lowerNames = EOID_FIELD_NAMES.map((n) => n.toLowerCase());
   const field = freeFields.find(
-    (f) => f.name?.trim().toLowerCase() === EOID_FIELD_NAME.toLowerCase()
+    (f) => f.name ? lowerNames.includes(f.name.trim().toLowerCase()) : false
   );
   return field?.value?.trim() || undefined;
 }
@@ -143,7 +147,7 @@ export function mapDeliveryNoteToSalesOrder(
 
   // ── Customer mandatory fields ──
   const eoid = extractEoid(customer.freeFields);
-  if (!eoid) missingFields.push(EOID_FIELD_NAME);
+  if (!eoid) missingFields.push("EOID Nummer");
 
   const customerName = customer.companyName ?? customer.name ?? "";
   if (!customerName) missingFields.push("Customer Name");

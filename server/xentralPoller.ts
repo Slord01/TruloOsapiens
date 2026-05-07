@@ -58,9 +58,12 @@ async function fetchNoteDetail(
   headers: Record<string, string>
 ): Promise<Record<string, unknown>> {
   // V3 detail includes lineItems with product IDs — primary source
+  // include[]=lineItems is required; without it Xentral omits the array entirely
   try {
+    const detailUrl = new URL(`${baseUrl}/api/v3/deliveryNotes/${id}`);
+    detailUrl.searchParams.set("include[0]", "lineItems");
     const v3Response = await fetchWithTimeout(
-      `${baseUrl}/api/v3/deliveryNotes/${id}`,
+      detailUrl.toString(),
       { headers }
     );
     if (v3Response.ok) {
@@ -73,6 +76,9 @@ async function fetchNoteDetail(
 
       // Remap V3 lineItems → positions shape expected by dataMapper
       const lineItems = (v3Note.lineItems as unknown[]) ?? [];
+      // Extract sales order number from the salesOrder reference object
+      const salesOrderRef = v3Note.salesOrder as Record<string, unknown> | undefined;
+      const salesOrderNumber = String(salesOrderRef?.documentNumber ?? salesOrderRef?.number ?? "") || undefined;
       const positions = lineItems
         .filter((li) => {
           const item = li as Record<string, unknown>;
@@ -129,6 +135,7 @@ async function fetchNoteDetail(
         documentNumber: v3Note.documentNumber,
         number: v3Note.documentNumber,
         date: v3Note.documentDate,
+        salesOrderNumber,
         positions,
         customer: {
           id: addressId,

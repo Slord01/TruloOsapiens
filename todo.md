@@ -85,3 +85,12 @@
 - [ ] Update xentralPoller.ts hasTobacco check to use both cache ID AND SKU prefix "95"
 - [ ] Add document number search input to Orders page header for targeted single-order fetch
 - [ ] Update fetch toast messages to show tobaccoFound count
+
+## Phase 11 — Sales Order Number Reference Field
+- [ ] Add salesOrderNumber column to delivery_notes table in drizzle/schema.ts
+- [ ] Generate and apply migration SQL via webdev_execute_sql
+- [ ] Extract salesOrderNumber from V3 detail response in xentralPoller.ts
+- [ ] Pass salesOrderNumber through webhookProcessor and upsertDeliveryNote in db.ts
+- [ ] Display sales order number in order cards and detail view in Orders.tsx
+- [ ] Include salesOrderNumber in the search index so users can search by order number
+- [ ] Update Vitest tests for the new field

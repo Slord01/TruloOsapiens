@@ -79,11 +79,13 @@ export async function processWebhookPayload(raw: unknown): Promise<{ id: number;
   const xentralId = String(payload.id ?? payload.deliveryNoteId ?? "");
   const xentralNumber = String(payload.documentNumber ?? payload.number ?? payload.deliveryNoteNumber ?? xentralId);
   const deliveryDate = String(payload.date ?? new Date().toISOString().split("T")[0]);
+  const salesOrderNumber = payload.salesOrderNumber ? String(payload.salesOrderNumber) : undefined;
 
   // Upsert a pending record first so we always have a DB row
   const baseNote = await upsertDeliveryNote({
     xentralId,
     xentralNumber,
+    salesOrderNumber,
     deliveryDate,
     rawPayload: raw as Record<string, unknown>,
     status: "pending",
