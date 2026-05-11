@@ -76,9 +76,48 @@ async function fetchNoteDetail(
 
       // Remap V3 lineItems → positions shape expected by dataMapper
       const lineItems = (v3Note.lineItems as unknown[]) ?? [];
-      // Extract sales order number from the salesOrder reference object
+      // Extract sales order reference — id for API lookup, documentNumber for display
       const salesOrderRef = v3Note.salesOrder as Record<string, unknown> | undefined;
       const salesOrderNumber = String(salesOrderRef?.documentNumber ?? salesOrderRef?.number ?? "") || undefined;
+      const salesOrderId = String(salesOrderRef?.id ?? "") || undefined;
+
+      // Fetch sales order details for payment method, delivery method, and item prices
+      let paymentMethod: string | undefined;
+      let deliveryMethod: string | undefined;
+      let salesOrderLineItems: Array<Record<string, unknown>> = [];
+      if (salesOrderId) {
+        try {
+          const soUrl = new URL(`${baseUrl}/api/v3/salesOrders/${salesOrderId}`);
+          soUrl.searchParams.set("include[0]", "lineItems");
+          const soResp = await fetchWithTimeout(soUrl.toString(), { headers }, 8_000);
+          if (soResp.ok) {
+            const soData = (await soResp.json()) as { data?: Record<string, unknown> };
+            const so = soData?.data ?? soData as Record<string, unknown>;
+            // Payment method: paymentMethod.name or paymentMethod (string)
+            const pm = so.paymentMethod as Record<string, unknown> | string | undefined;
+            paymentMethod = (typeof pm === "object" ? String(pm?.name ?? pm?.description ?? "") : String(pm ?? "")).trim() || undefined;
+            // Delivery method: shippingMethod.name or shippingMethod (string)
+            const dm = so.shippingMethod as Record<string, unknown> | string | undefined;
+            deliveryMethod = (typeof dm === "object" ? String(dm?.name ?? dm?.description ?? "") : String(dm ?? "")).trim() || undefined;
+            // Line items for price extraction
+            salesOrderLineItems = ((so.lineItems as unknown[]) ?? []) as Array<Record<string, unknown>>;
+            console.log(`[Poller] Sales order ${salesOrderId}: payment=${paymentMethod ?? "n/a"}, delivery=${deliveryMethod ?? "n/a"}, items=${salesOrderLineItems.length}`);
+          }
+        } catch {
+          console.log(`[Poller] Could not fetch sales order ${salesOrderId} — payment/delivery will be missing`);
+        }
+      }
+      // Build a price lookup from sales order line items (keyed by product number)
+      const soPriceMap = new Map<string, { amount: number; currency: string }>();
+      for (const soItem of salesOrderLineItems) {
+        const soItemNum = String((soItem.product as Record<string, unknown> | undefined)?.number ?? soItem.number ?? "");
+        const soPrice = soItem.unitPrice ?? soItem.price;
+        const soCurrency = String((soItem.price as Record<string, unknown> | undefined)?.currency ?? soItem.currency ?? "EUR");
+        if (soItemNum && soPrice !== undefined) {
+          soPriceMap.set(soItemNum, { amount: Number(soPrice), currency: soCurrency });
+        }
+      }
+
       const positions = lineItems
         .filter((li) => {
           const item = li as Record<string, unknown>;
@@ -87,16 +126,21 @@ async function fetchNoteDetail(
         .map((li) => {
           const item = li as Record<string, unknown>;
           const prod = item.product as Record<string, unknown> | undefined;
+          const productNumber = String(item.number ?? prod?.number ?? "");
+          // Try to get price from sales order line items first, then delivery note
+          const soPrice = soPriceMap.get(productNumber);
+          const itemPrice = item.unitPrice ?? (item.price as Record<string, unknown> | undefined)?.amount;
+          const itemCurrency = String((item.price as Record<string, unknown> | undefined)?.currency ?? "EUR");
           return {
             product: {
               id: String(prod?.id ?? ""),
-              number: String(item.number ?? prod?.number ?? ""),
+              number: productNumber,
               name: String(item.name ?? prod?.name ?? ""),
               ean: prod?.ean ? String(prod.ean) : undefined,
             },
             quantity: item.quantity,
             unit: item.unit,
-            price: undefined,
+            price: soPrice ?? (itemPrice !== undefined ? { amount: Number(itemPrice), currency: itemCurrency } : undefined),
           };
         });
 
@@ -148,6 +192,9 @@ async function fetchNoteDetail(
         number: v3Note.documentNumber,
         date: v3Note.documentDate,
         salesOrderNumber,
+        salesOrderId,
+        paymentMethod,
+        deliveryMethod,
         positions,
         customer: {
           id: addressId,

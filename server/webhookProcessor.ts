@@ -157,6 +157,8 @@ export async function processWebhookPayload(raw: unknown): Promise<{ id: number;
       destinationType: 2,
       transportMode: 3,
       transportVehicle: "",
+      paymentMethod: mapping.paymentMethod ?? "",
+      deliveryMethod: mapping.deliveryMethod ?? "",
       products: qrProducts,
     };
     const qrResult = await generateDispatchQrCode(qrParams);
@@ -174,6 +176,11 @@ export async function processWebhookPayload(raw: unknown): Promise<{ id: number;
     errorMessage: qrCodeDataUrl ? null : "QR code generation failed",
     eoid: mapping.eoid ?? null,
     fid: mapping.fid ?? null,
+    paymentMethod: mapping.paymentMethod ?? null,
+    deliveryMethod: mapping.deliveryMethod ?? null,
+    orderValue: mapping.orderValue ?? null,
+    orderCurrency: mapping.orderCurrency ?? null,
+    salesOrderId: mapping.salesOrderId ?? null,
     customerName: mapping.customerName ?? null,
     addressStreet: mapping.addressStreet ?? null,
     addressCity: mapping.addressCity ?? null,

@@ -73,6 +73,11 @@ export async function upsertDeliveryNote(note: InsertDeliveryNote) {
         customerName: note.customerName,
         eoid: note.eoid,
         fid: note.fid,
+        salesOrderId: note.salesOrderId,
+        paymentMethod: note.paymentMethod,
+        deliveryMethod: note.deliveryMethod,
+        orderValue: note.orderValue,
+        orderCurrency: note.orderCurrency,
         addressStreet: note.addressStreet,
         addressCity: note.addressCity,
         addressPostalCode: note.addressPostalCode,
@@ -205,6 +210,16 @@ export async function updateDeliveryNoteStatus(
     eoid?: string | null;
     /** Customer Facility ID from Xentral freifeld6 */
     fid?: string | null;
+    /** Payment method from linked sales order */
+    paymentMethod?: string | null;
+    /** Delivery/shipping method from linked sales order */
+    deliveryMethod?: string | null;
+    /** Total tobacco order value (stored as decimal string) */
+    orderValue?: string | null;
+    /** Currency for order value */
+    orderCurrency?: string | null;
+    /** Xentral sales order ID */
+    salesOrderId?: string | null;
     customerName?: string | null;
     addressStreet?: string | null;
     addressCity?: string | null;

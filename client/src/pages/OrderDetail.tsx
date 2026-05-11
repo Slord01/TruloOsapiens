@@ -14,6 +14,8 @@ import {
   Calendar,
   QrCode,
   Download,
+  CreditCard,
+  Truck,
 } from "lucide-react";
 
 interface OrderDetailProps {
@@ -232,9 +234,35 @@ export default function OrderDetail({ id }: OrderDetailProps) {
           <div className="space-y-4">
             {/* Order Info */}
             <Section title="Order Information" icon={Hash}>
-              <DataRow label="Order Number" value={note.xentralNumber} highlight />
+              <DataRow label="Delivery Note" value={note.xentralNumber} highlight />
+              {(note as {salesOrderNumber?: string | null}).salesOrderNumber && (
+                <DataRow label="Sales Order" value={(note as {salesOrderNumber?: string | null}).salesOrderNumber} />
+              )}
               <DataRow label="Delivery Date" value={note.deliveryDate} />
             </Section>
+
+            {/* Order Value & Payment */}
+            {((note as {paymentMethod?: string | null}).paymentMethod ||
+              (note as {deliveryMethod?: string | null}).deliveryMethod ||
+              (note as {orderValue?: string | null}).orderValue) && (
+              <Section title="Order Details" icon={CreditCard}>
+                {(note as {orderValue?: string | null}).orderValue && (
+                  <DataRow
+                    label="Order Value"
+                    value={`${Number((note as {orderValue?: string | null}).orderValue).toFixed(2)} ${
+                      (note as {orderCurrency?: string | null}).orderCurrency ?? "EUR"
+                    }`}
+                    highlight
+                  />
+                )}
+                {(note as {paymentMethod?: string | null}).paymentMethod && (
+                  <DataRow label="Payment Method" value={(note as {paymentMethod?: string | null}).paymentMethod} />
+                )}
+                {(note as {deliveryMethod?: string | null}).deliveryMethod && (
+                  <DataRow label="Delivery Method" value={(note as {deliveryMethod?: string | null}).deliveryMethod} />
+                )}
+              </Section>
+            )}
 
             {/* Customer */}
             <Section title="Customer" icon={User}>

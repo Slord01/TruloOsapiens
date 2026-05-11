@@ -63,6 +63,10 @@ export interface DispatchQrParams {
   saad?: string;
   /** MRN export declaration number (optional) */
   mrn?: string;
+  /** Payment method (field 13 — e.g. Invoice, Prepayment) */
+  paymentMethod?: string;
+  /** Delivery/shipping method (field 14 — e.g. DHL, Courier) */
+  deliveryMethod?: string;
   /** Product line items — each must have a GTIN and quantity */
   products: Array<{
     gtin: string;
@@ -106,6 +110,8 @@ export function buildDispatchQrText(params: DispatchQrParams): string {
     emcs = "",
     saad = "",
     mrn = "",
+    paymentMethod = "",
+    deliveryMethod = "",
     products,
   } = params;
 
@@ -123,8 +129,8 @@ export function buildDispatchQrText(params: DispatchQrParams): string {
     saad,                  // 10 - SAAD
     mrn,                   // 11 - MRN
     "FALSE",               // 12 - Auto Arrival
-    "",                    // 13 - Custom
-    "",                    // 14 - Custom
+    paymentMethod,         // 13 - Payment Method
+    deliveryMethod,        // 14 - Delivery Method
     "0",                   // 15 - Product Count (always 0 per Osapiens convention)
   ];
 

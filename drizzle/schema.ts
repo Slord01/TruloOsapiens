@@ -44,6 +44,16 @@ export const deliveryNotes = mysqlTable("delivery_notes", {
   fid: varchar("fid", { length: 256 }),
   /** Plain text Osapiens Dispatch QR code payload (OSAPV1EDP semicolon-delimited) */
   dispatchQrText: text("dispatchQrText"),
+  /** Xentral sales order ID (used to fetch payment/delivery data) */
+  salesOrderId: varchar("salesOrderId", { length: 128 }),
+  /** Payment method from linked sales order (e.g. Invoice, Prepayment) */
+  paymentMethod: varchar("paymentMethod", { length: 256 }),
+  /** Delivery/shipping method from linked sales order (e.g. DHL, Courier) */
+  deliveryMethod: varchar("deliveryMethod", { length: 256 }),
+  /** Total value of tobacco products (sum of line items) */
+  orderValue: decimal("orderValue", { precision: 12, scale: 2 }),
+  /** Currency code for order value (e.g. EUR) */
+  orderCurrency: varchar("orderCurrency", { length: 8 }),
   /** Delivery address street */
   addressStreet: varchar("addressStreet", { length: 512 }),
   /** Delivery address city */

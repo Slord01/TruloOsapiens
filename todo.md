@@ -110,3 +110,15 @@
 - [x] Update OrderDetail.tsx: show FID field in customer section
 - [x] Update OrderDetail.tsx: show product GTIN in items table
 - [x] Update Vitest tests: update tnt.test.ts for new dispatch QR format
+
+## Phase 13 — Order Number Fix & Sales Order Data (Payment, Delivery, Value)
+
+- [x] Fix order number display: ensure xentralNumber stores the delivery note documentNumber (e.g. LN-2026-00123), not the internal ID
+- [x] Add salesOrderId column to delivery_notes to store the Xentral sales order ID for API lookup
+- [x] Add paymentMethod, deliveryMethod, orderValue, orderCurrency columns to delivery_notes
+- [x] Apply migration SQL via webdev_execute_sql
+- [x] In xentralPoller.ts: after fetching delivery note detail, fetch the linked sales order via V3 API to extract paymentMethod, deliveryMethod, and line item values
+- [x] Pass paymentMethod, deliveryMethod, orderValue, orderCurrency through webhookProcessor to DB
+- [x] Add paymentMethod and deliveryMethod to QR code payload (fields 13 and 14, currently empty)
+- [x] Update OrderDetail.tsx: show payment method, delivery method, and order value in the UI
+- [x] Update Vitest tests for new fields

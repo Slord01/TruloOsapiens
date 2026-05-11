@@ -51,6 +51,12 @@ export interface XentralDeliveryNotePayload {
   items?: XentralPosition[];
   /** Sales order reference number (extracted from salesOrder.documentNumber in V3 detail) */
   salesOrderNumber?: string;
+  /** Xentral sales order internal ID (used for API lookup) */
+  salesOrderId?: string;
+  /** Payment method from linked sales order */
+  paymentMethod?: string;
+  /** Delivery/shipping method from linked sales order */
+  deliveryMethod?: string;
 }
 
 // ─── Osapiens SalesOrder Types ────────────────────────────────────────────────
@@ -94,6 +100,16 @@ export interface MappingResult {
   eoid?: string;
   /** FID (facility ID) from Xentral freifeld6 */
   fid?: string;
+  /** Payment method from linked sales order */
+  paymentMethod?: string;
+  /** Delivery/shipping method from linked sales order */
+  deliveryMethod?: string;
+  /** Total value of tobacco line items (as string for DB decimal column) */
+  orderValue?: string;
+  /** Currency for order value */
+  orderCurrency?: string;
+  /** Xentral sales order ID */
+  salesOrderId?: string;
   addressStreet?: string;
   addressCity?: string;
   addressPostalCode?: string;
@@ -185,11 +201,36 @@ export function mapDeliveryNoteToSalesOrder(
 
   const fid = extractFid(customer);
 
+  // Sales order enrichment fields
+  const paymentMethod = raw.paymentMethod?.trim() || undefined;
+  const deliveryMethod = raw.deliveryMethod?.trim() || undefined;
+  const salesOrderId = raw.salesOrderId?.trim() || undefined;
+
+  // Calculate total order value from tobacco positions
+  let orderValue: string | undefined;
+  let orderCurrency: string | undefined;
+  const positionsWithPrice = tobaccoPositions.filter(
+    (p) => p.price?.amount !== undefined
+  );
+  if (positionsWithPrice.length > 0) {
+    const totalValue = positionsWithPrice.reduce(
+      (sum, p) => sum + Number(p.price!.amount!) * Number(p.quantity ?? 0),
+      0
+    );
+    orderValue = totalValue.toFixed(2);
+    orderCurrency = positionsWithPrice[0].price?.currency ?? "EUR";
+  }
+
   const flatFields = {
     customerId: String(customer.id ?? ""),
     customerName,
     eoid,
     fid,
+    paymentMethod,
+    deliveryMethod,
+    orderValue,
+    orderCurrency,
+    salesOrderId,
     addressStreet: address.street ?? "",
     addressCity: address.city ?? "",
     addressPostalCode: address.zipCode ?? "",

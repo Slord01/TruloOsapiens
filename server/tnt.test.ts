@@ -148,6 +148,39 @@ describe("mapDeliveryNoteToSalesOrder", () => {
     expect(result.addressPostalCode).toBe("10115");
     expect(result.addressCountry).toBe("DE");
   });
+
+  it("calculates total order value from tobacco positions", () => {
+    // TAB-001: 50 * 6.50 = 325.00, TAB-002: 20 * 12.00 = 240.00 → total = 565.00
+    const result = mapDeliveryNoteToSalesOrder(basePayload as any, tobaccoPositions as any);
+    expect(result.success).toBe(true);
+    expect(result.orderValue).toBe("565.00");
+    expect(result.orderCurrency).toBe("EUR");
+  });
+
+  it("returns undefined orderValue when no prices are available", () => {
+    const positionsNoPrices = tobaccoPositions.map((p) => ({ ...p, price: undefined }));
+    const result = mapDeliveryNoteToSalesOrder(basePayload as any, positionsNoPrices as any);
+    expect(result.orderValue).toBeUndefined();
+  });
+
+  it("extracts paymentMethod and deliveryMethod from payload", () => {
+    const payloadWithSO = {
+      ...basePayload,
+      paymentMethod: "Invoice 30 days",
+      deliveryMethod: "DHL Express",
+      salesOrderId: "SO-12345",
+    };
+    const result = mapDeliveryNoteToSalesOrder(payloadWithSO as any, tobaccoPositions as any);
+    expect(result.paymentMethod).toBe("Invoice 30 days");
+    expect(result.deliveryMethod).toBe("DHL Express");
+    expect(result.salesOrderId).toBe("SO-12345");
+  });
+
+  it("returns undefined paymentMethod when not provided", () => {
+    const result = mapDeliveryNoteToSalesOrder(basePayload as any, tobaccoPositions as any);
+    expect(result.paymentMethod).toBeUndefined();
+    expect(result.deliveryMethod).toBeUndefined();
+  });
 });
 
 // ─── Dispatch QR Generator Tests ─────────────────────────────────────────────
