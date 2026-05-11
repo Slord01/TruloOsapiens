@@ -21,6 +21,11 @@ import { processWebhookPayload } from "./webhookProcessor";
 import { refreshProductCache, isTobaccoProduct, isTobaccoProductNumber } from "./productCache";
 import { getDeliveryNoteByXentralId } from "./db";
 
+/** Module-level cache for payment method names — populated once per server session */
+let _pmCache: Record<string, string> | null = null;
+/** Module-level cache for shipping method names — populated once per server session */
+let _smCache: Record<string, string> | null = null;
+
 export interface PollResult {
   fetched: number;
   /** Tobacco notes found (before DB check) */
@@ -93,12 +98,103 @@ async function fetchNoteDetail(
           if (soResp.ok) {
             const soData = (await soResp.json()) as { data?: Record<string, unknown> };
             const so = soData?.data ?? soData as Record<string, unknown>;
-            // Payment method: paymentMethod.name or paymentMethod (string)
-            const pm = so.paymentMethod as Record<string, unknown> | string | undefined;
-            paymentMethod = (typeof pm === "object" ? String(pm?.name ?? pm?.description ?? "") : String(pm ?? "")).trim() || undefined;
-            // Delivery method: shippingMethod.name or shippingMethod (string)
-            const dm = so.shippingMethod as Record<string, unknown> | string | undefined;
-            deliveryMethod = (typeof dm === "object" ? String(dm?.name ?? dm?.description ?? "") : String(dm ?? "")).trim() || undefined;
+            // Payment method: financials.paymentMethod is {id: N} — resolve name from paymentMethods endpoint
+            const financials = so.financials as Record<string, unknown> | undefined;
+            const pmRaw = financials?.paymentMethod ?? financials?.paymentCondition ?? so.paymentMethod ?? so.payment;
+            if (typeof pmRaw === "object" && pmRaw !== null) {
+              const pmObj = pmRaw as Record<string, unknown>;
+              const pmName = String(pmObj.name ?? pmObj.description ?? "").trim();
+              if (pmName) {
+                paymentMethod = pmName;
+              } else if (pmObj.id) {
+                // Use V1 /api/v1/paymentMethods endpoint (V2/V3 don't expose this)
+                // Cache the full list to avoid repeated API calls per fetch run
+                if (!_pmCache) {
+                  try {
+                    // V1 API: fetch all pages using page[number] param
+                    // extra = {page:{number:1,size:10},totalCount:29}
+                    const tmpCache: Record<string, string> = {};
+                    // First fetch to get totalCount and pageSize
+                    const pm1Url = new URL(`${baseUrl}/api/v1/paymentMethods`);
+                    const pm1Resp = await fetchWithTimeout(pm1Url.toString(), { headers }, 5_000);
+                    if (pm1Resp.ok) {
+                      const pm1Data = (await pm1Resp.json()) as { data?: Array<Record<string, unknown>>; extra?: { page?: { number?: number; size?: number }; totalCount?: number } };
+                      const pmTotalCount = pm1Data?.extra?.totalCount ?? 0;
+                      const pmPageSize = pm1Data?.extra?.page?.size ?? 10;
+                      const totalPages = Math.ceil(pmTotalCount / pmPageSize);
+                      // Load page 1 results
+                      for (const pm of pm1Data?.data ?? []) {
+                        const pmId = String(pm.id ?? "");
+                        const pmDesignation = String(pm.designation ?? pm.name ?? "").trim();
+                        if (pmId && pmDesignation) tmpCache[pmId] = pmDesignation;
+                      }
+                      // Fetch remaining pages (V1 requires both page[number] AND page[size])
+                      for (let p = 2; p <= totalPages; p++) {
+                        const pmPUrl = new URL(`${baseUrl}/api/v1/paymentMethods`);
+                        pmPUrl.searchParams.set("page[number]", String(p));
+                        pmPUrl.searchParams.set("page[size]", String(pmPageSize));
+                        const pmPResp = await fetchWithTimeout(pmPUrl.toString(), { headers }, 5_000);
+                        if (!pmPResp.ok) break;
+                        const pmPData = (await pmPResp.json()) as { data?: Array<Record<string, unknown>> };
+                        for (const pm of pmPData?.data ?? []) {
+                          const pmId = String(pm.id ?? "");
+                          const pmDesignation = String(pm.designation ?? pm.name ?? "").trim();
+                          if (pmId && pmDesignation) tmpCache[pmId] = pmDesignation;
+                        }
+                      }
+                    }
+                    _pmCache = tmpCache;
+                    console.log(`[Poller] PM cache loaded: ${Object.keys(_pmCache).length} methods, IDs: ${Object.keys(_pmCache).join("|")}, names: ${Object.values(_pmCache).join("|").substring(0, 400)}`);
+                  } catch (e) { console.log(`[Poller] PM V1 exception: ${e}`); }
+                }
+                paymentMethod = _pmCache?.[String(pmObj.id)] ?? `ID:${pmObj.id}`;
+              }
+            } else if (typeof pmRaw === "string") {
+              paymentMethod = pmRaw.trim() || undefined;
+            }
+            // Delivery/shipping method: shippingMethod is {id: N} — resolve via V1 list cache
+            const dmRaw = so.shippingMethod as Record<string, unknown> | string | undefined;
+            if (typeof dmRaw === "object" && dmRaw !== null && dmRaw.name) {
+              deliveryMethod = String(dmRaw.name).trim() || undefined;
+            } else if (typeof dmRaw === "object" && dmRaw !== null && dmRaw.id) {
+              // Build shipping method cache if not already loaded
+              if (!_smCache) {
+                const tmpSmCache: Record<string, string> = {};
+                try {
+                  const smUrl = new URL(`${baseUrl}/api/v1/shippingMethods`);
+                  const smResp = await fetchWithTimeout(smUrl.toString(), { headers }, 8_000);
+                  if (smResp.ok) {
+                    const smData = (await smResp.json()) as { data?: Array<Record<string, unknown>>; extra?: { totalCount?: number; page?: { number?: number; size?: number } } };
+                    const smPageSize = smData?.extra?.page?.size ?? 10;
+                    const smTotalCount = smData?.extra?.totalCount ?? 0;
+                    const smTotalPages = Math.ceil(smTotalCount / smPageSize);
+                    for (const sm of smData?.data ?? []) {
+                      const smId = String(sm.id ?? "");
+                      const smName = String(sm.designation ?? sm.name ?? "").trim();
+                      if (smId && smName) tmpSmCache[smId] = smName;
+                    }
+                    // Fetch remaining pages
+                    for (let p = 2; p <= smTotalPages; p++) {
+                      const smPUrl = new URL(`${baseUrl}/api/v1/shippingMethods`);
+                      smPUrl.searchParams.set("page[number]", String(p));
+                      smPUrl.searchParams.set("page[size]", String(smPageSize));
+                      const smPResp = await fetchWithTimeout(smPUrl.toString(), { headers }, 5_000);
+                      if (!smPResp.ok) break;
+                      const smPData = (await smPResp.json()) as { data?: Array<Record<string, unknown>> };
+                      for (const sm of smPData?.data ?? []) {
+                        const smId = String(sm.id ?? "");
+                        const smName = String(sm.designation ?? sm.name ?? "").trim();
+                        if (smId && smName) tmpSmCache[smId] = smName;
+                      }
+                    }
+                    _smCache = tmpSmCache;
+                  }
+                } catch (e) { console.log(`[Poller] SM V1 exception: ${e}`); }
+              }
+              deliveryMethod = _smCache?.[String(dmRaw.id)] ?? `ID:${dmRaw.id}`;
+            } else if (typeof dmRaw === "string") {
+              deliveryMethod = dmRaw.trim() || undefined;
+            }
             // Line items for price extraction
             salesOrderLineItems = ((so.lineItems as unknown[]) ?? []) as Array<Record<string, unknown>>;
             console.log(`[Poller] Sales order ${salesOrderId}: payment=${paymentMethod ?? "n/a"}, delivery=${deliveryMethod ?? "n/a"}, items=${salesOrderLineItems.length}`);
@@ -108,13 +204,23 @@ async function fetchNoteDetail(
         }
       }
       // Build a price lookup from sales order line items (keyed by product number)
+      // Xentral V3 price structure: { net: { amount: "4.50000000", currency: "EUR" }, gross: { ... } }
       const soPriceMap = new Map<string, { amount: number; currency: string }>();
       for (const soItem of salesOrderLineItems) {
-        const soItemNum = String((soItem.product as Record<string, unknown> | undefined)?.number ?? soItem.number ?? "");
-        const soPrice = soItem.unitPrice ?? soItem.price;
-        const soCurrency = String((soItem.price as Record<string, unknown> | undefined)?.currency ?? soItem.currency ?? "EUR");
-        if (soItemNum && soPrice !== undefined) {
-          soPriceMap.set(soItemNum, { amount: Number(soPrice), currency: soCurrency });
+        // Product number is directly on the line item (not nested under product)
+        const soItemNum = String(soItem.number ?? (soItem.product as Record<string, unknown> | undefined)?.number ?? "");
+        const priceObj = soItem.price as Record<string, unknown> | undefined;
+        const netObj = priceObj?.net as Record<string, unknown> | undefined;
+        const grossObj = priceObj?.gross as Record<string, unknown> | undefined;
+        // Prefer net amount; fall back to gross; fall back to flat unitPrice
+        const rawAmount = netObj?.amount ?? grossObj?.amount ?? soItem.unitPrice;
+        const soCurrency = String(netObj?.currency ?? grossObj?.currency ?? soItem.currency ?? "EUR");
+        if (soItemNum && rawAmount !== undefined) {
+          // Replace comma with dot to handle any locale-formatted strings
+          const amount = Number(String(rawAmount).replace(",", "."));
+          if (!isNaN(amount)) {
+            soPriceMap.set(soItemNum, { amount, currency: soCurrency });
+          }
         }
       }
 

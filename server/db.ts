@@ -229,5 +229,30 @@ export async function updateDeliveryNoteStatus(
 ) {
   const db = await getDb();
   if (!db) return;
-  await db.update(deliveryNotes).set(update).where(eq(deliveryNotes.id, id));
+  // Build the set object carefully — decimal columns must receive NULL (not undefined)
+  // to avoid MySQL ER_TRUNCATED_WRONG_VALUE errors when the value is not provided.
+  const setValues: Record<string, unknown> = {
+    status: update.status,
+  };
+  if (update.osapiensSalesOrder !== undefined) setValues.osapiensSalesOrder = update.osapiensSalesOrder;
+  if (update.qrCodeDataUrl !== undefined) setValues.qrCodeDataUrl = update.qrCodeDataUrl;
+  if (update.dispatchQrText !== undefined) setValues.dispatchQrText = update.dispatchQrText;
+  if (update.errorMessage !== undefined) setValues.errorMessage = update.errorMessage;
+  if (update.eoid !== undefined) setValues.eoid = update.eoid;
+  if (update.fid !== undefined) setValues.fid = update.fid;
+  if (update.paymentMethod !== undefined) setValues.paymentMethod = update.paymentMethod;
+  if (update.deliveryMethod !== undefined) setValues.deliveryMethod = update.deliveryMethod;
+  // Decimal column: only set when we have a valid numeric string value.
+  // When null/undefined, skip it entirely to avoid MySQL ER_TRUNCATED_WRONG_VALUE.
+  if (update.orderValue !== undefined && update.orderValue !== null) {
+    setValues.orderValue = update.orderValue;
+  }
+  if (update.orderCurrency !== undefined) setValues.orderCurrency = update.orderCurrency;
+  if (update.salesOrderId !== undefined) setValues.salesOrderId = update.salesOrderId;
+  if (update.customerName !== undefined) setValues.customerName = update.customerName;
+  if (update.addressStreet !== undefined) setValues.addressStreet = update.addressStreet;
+  if (update.addressCity !== undefined) setValues.addressCity = update.addressCity;
+  if (update.addressPostalCode !== undefined) setValues.addressPostalCode = update.addressPostalCode;
+  if (update.addressCountry !== undefined) setValues.addressCountry = update.addressCountry;
+  await db.update(deliveryNotes).set(setValues as any).where(eq(deliveryNotes.id, id));
 }

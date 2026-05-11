@@ -1,0 +1,20 @@
+{
+  "query": "SELECT id, xentralId, xentralNumber, status, paymentMethod, deliveryMethod, orderValue, orderCurrency FROM delivery_notes WHERE xentralNumber = '451197' OR xentralId = '220035';",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway03.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 26t7xFUodfTYuBK.953635c07da9 --database NgFij54VfzxFZ4enRLyVW9 --execute SELECT id, xentralId, xentralNumber, status, paymentMethod, deliveryMethod, orderValue, orderCurrency FROM delivery_notes WHERE xentralNumber = '451197' OR xentralId = '220035';",
+  "rows": [
+    {
+      "id": "180001",
+      "xentralId": "220035",
+      "xentralNumber": "451197",
+      "status": "ready",
+      "paymentMethod": "NULL",
+      "deliveryMethod": "NULL",
+      "orderValue": "13.50",
+      "orderCurrency": "EUR"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\txentralId\txentralNumber\tstatus\tpaymentMethod\tdeliveryMethod\torderValue\torderCurrency\n180001\t220035\t451197\tready\tNULL\tNULL\t13.50\tEUR\n",
+  "stderr": "",
+  "execution_time_ms": 320
+}
