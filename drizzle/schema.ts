@@ -40,6 +40,10 @@ export const deliveryNotes = mysqlTable("delivery_notes", {
   customerName: varchar("customerName", { length: 512 }),
   /** Customer EOID extracted from free field "EOID Number" */
   eoid: varchar("eoid", { length: 256 }),
+  /** Customer Facility ID (FID) extracted from Xentral freifeld6 */
+  fid: varchar("fid", { length: 256 }),
+  /** Plain text Osapiens Dispatch QR code payload (OSAPV1EDP semicolon-delimited) */
+  dispatchQrText: text("dispatchQrText"),
   /** Delivery address street */
   addressStreet: varchar("addressStreet", { length: 512 }),
   /** Delivery address city */

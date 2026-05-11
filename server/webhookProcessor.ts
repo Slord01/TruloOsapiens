@@ -19,7 +19,7 @@ import {
   type XentralDeliveryNotePayload,
   type XentralPosition,
 } from "./dataMapper";
-import { generateQrCode } from "./qrGenerator";
+import { generateDispatchQrCode, type DispatchQrParams } from "./qrGenerator";
 import {
   upsertDeliveryNote,
   insertDeliveryNoteItems,
@@ -139,20 +139,41 @@ export async function processWebhookPayload(raw: unknown): Promise<{ id: number;
     return { id: baseNote.id, status: "error" };
   }
 
-  // Generate QR code
+  // Build dispatch QR code params from mapping result
+  const qrProducts = tobaccoPositions.map((pos) => ({
+    // Use EAN/GTIN as product code — fall back to product number if EAN not available
+    gtin: pos.product?.ean ?? pos.product?.number ?? "",
+    quantity: Math.round(Number(pos.quantity ?? 0)),
+  })).filter((p) => p.gtin);
+
+  // Generate Osapiens Dispatch QR code (OSAPV1EDP plain text format)
   let qrCodeDataUrl: string | null = null;
+  let dispatchQrText: string | null = null;
   try {
-    qrCodeDataUrl = await generateQrCode(mapping.salesOrder!);
+    const qrParams: DispatchQrParams = {
+      eoid: mapping.eoid ?? "",
+      fid: mapping.fid ?? "",
+      eventTime: new Date(),
+      destinationType: 2,
+      transportMode: 3,
+      transportVehicle: "",
+      products: qrProducts,
+    };
+    const qrResult = await generateDispatchQrCode(qrParams);
+    qrCodeDataUrl = qrResult.dataUrl;
+    dispatchQrText = qrResult.plainText;
   } catch (err) {
-    console.error("[QR] Failed to generate QR code:", err);
+    console.error("[QR] Failed to generate dispatch QR code:", err);
   }
 
   await updateDeliveryNoteStatus(baseNote.id, {
     status: qrCodeDataUrl ? "ready" : "error",
     osapiensSalesOrder: mapping.salesOrder as unknown as Record<string, unknown>,
     qrCodeDataUrl,
+    dispatchQrText,
     errorMessage: qrCodeDataUrl ? null : "QR code generation failed",
     eoid: mapping.eoid ?? null,
+    fid: mapping.fid ?? null,
     customerName: mapping.customerName ?? null,
     addressStreet: mapping.addressStreet ?? null,
     addressCity: mapping.addressCity ?? null,

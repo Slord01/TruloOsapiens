@@ -88,9 +88,25 @@
 
 ## Phase 11 — Sales Order Number Reference Field
 - [ ] Add salesOrderNumber column to delivery_notes table in drizzle/schema.ts
-- [ ] Generate and apply migration SQL via webdev_execute_sql
+- [x] Generate and apply migration SQL via webdev_execute_sql
 - [ ] Extract salesOrderNumber from V3 detail response in xentralPoller.ts
 - [ ] Pass salesOrderNumber through webhookProcessor and upsertDeliveryNote in db.ts
 - [ ] Display sales order number in order cards and detail view in Orders.tsx
 - [ ] Include salesOrderNumber in the search index so users can search by order number
 - [ ] Update Vitest tests for the new field
+
+## Phase 12 — QR Code Format Fix (Osapiens Dispatch OSAPV1EDP)
+
+- [x] Add `fid` column to `delivery_notes` table in drizzle/schema.ts (customer facility ID from Xentral freifeld6)
+- [x] Add `dispatchQrText` column to `delivery_notes` table (plain text QR string)
+- [x] Generate and apply migration SQL via webdev_execute_sql
+- [x] Fetch FID from Xentral `freifeld6` in xentralPoller.ts alongside EOID
+- [x] Update dataMapper.ts: add FID to MappingResult, pass through to DB
+- [x] Update dataMapper.ts: change QR data to use GTIN (ean) as product code, not productNumber
+- [x] Rewrite qrGenerator.ts: produce OSAPV1EDP semicolon-delimited plain text instead of JSON
+- [x] Update webhookProcessor.ts: store dispatchQrText and fid in DB
+- [x] Update db.ts: include fid and dispatchQrText in upsertDeliveryNote and updateDeliveryNoteStatus
+- [x] Update routers.ts: expose fid and dispatchQrText in getById response
+- [x] Update OrderDetail.tsx: show FID field in customer section
+- [x] Update OrderDetail.tsx: show product GTIN in items table
+- [x] Update Vitest tests: update tnt.test.ts for new dispatch QR format

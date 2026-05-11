@@ -181,8 +181,13 @@ export default function OrderDetail({ id }: OrderDetailProps) {
                 </div>
                 <div className="px-4 py-3 border-t border-border bg-[oklch(0.20_0.06_145_/_0.3)]">
                   <p className="text-xs text-[oklch(0.65_0.18_145)] text-center font-medium">
-                    Scan this code with the Osapiens scanner to load order data
+                    Scan this code with the Osapiens scanner to load dispatch data
                   </p>
+                  {note.dispatchQrText && (
+                    <p className="text-[10px] text-muted-foreground text-center mt-1.5 break-all font-mono leading-relaxed">
+                      {note.dispatchQrText}
+                    </p>
+                  )}
                 </div>
               </div>
             ) : status === "error" ? (
@@ -235,6 +240,7 @@ export default function OrderDetail({ id }: OrderDetailProps) {
             <Section title="Customer" icon={User}>
               <DataRow label="Name" value={note.customerName} />
               <DataRow label="EOID Number" value={note.eoid} highlight />
+              <DataRow label="FID" value={(note as {fid?: string | null}).fid} highlight />
             </Section>
 
             {/* Address */}
@@ -270,7 +276,12 @@ export default function OrderDetail({ id }: OrderDetailProps) {
                             )}
                             {item.ean && (
                               <span className="text-xs text-muted-foreground">
-                                EAN: <span className="text-foreground">{item.ean}</span>
+                                GTIN: <span className="text-foreground font-medium">{item.ean}</span>
+                              </span>
+                            )}
+                            {!item.ean && item.productNumber && (
+                              <span className="text-xs text-[oklch(0.65_0.18_45)] bg-[oklch(0.20_0.06_45_/_0.3)] px-1.5 py-0.5 rounded">
+                                No GTIN — using SKU in QR
                               </span>
                             )}
                           </div>

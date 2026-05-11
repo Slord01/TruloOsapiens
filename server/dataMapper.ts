@@ -30,6 +30,8 @@ export interface XentralCustomer {
     countryCode?: string;
   };
   freeFields?: Array<{ name?: string; value?: string }>;
+  /** FID (facility ID) extracted from Xentral freifeld6 */
+  fid?: string;
 }
 
 export interface XentralDeliveryNotePayload {
@@ -90,6 +92,8 @@ export interface MappingResult {
   customerId?: string;
   customerName?: string;
   eoid?: string;
+  /** FID (facility ID) from Xentral freifeld6 */
+  fid?: string;
   addressStreet?: string;
   addressCity?: string;
   addressPostalCode?: string;
@@ -110,6 +114,14 @@ function extractEoid(freeFields?: Array<{ name?: string; value?: string }>): str
     (f) => f.name ? lowerNames.includes(f.name.trim().toLowerCase()) : false
   );
   return field?.value?.trim() || undefined;
+}
+
+/**
+ * Extract FID (facility identifier) from customer object.
+ * FID is stored directly on the customer object (from Xentral freifeld6).
+ */
+function extractFid(customer: XentralCustomer): string | undefined {
+  return customer.fid?.trim() || undefined;
 }
 
 /**
@@ -171,10 +183,13 @@ export function mapDeliveryNoteToSalesOrder(
     currency: pos.price?.currency ?? "EUR",
   }));
 
+  const fid = extractFid(customer);
+
   const flatFields = {
     customerId: String(customer.id ?? ""),
     customerName,
     eoid,
+    fid,
     addressStreet: address.street ?? "",
     addressCity: address.city ?? "",
     addressPostalCode: address.zipCode ?? "",

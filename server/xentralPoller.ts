@@ -100,9 +100,10 @@ async function fetchNoteDetail(
           };
         });
 
-      // Fetch EOID from Xentral V1 address record (freifeld5 = ADRESSE_FREIFELD5)
-      // The EOID is stored in the 5th free field of the customer address in Xentral.
+      // Fetch EOID and FID from Xentral V1 address record
+      // freifeld5 = EOID, freifeld6 = FID (facility identifier)
       let freeFields: Array<{ name?: string; value?: string }> = [];
+      let fidFromAddress: string | undefined = undefined;
       if (addressId) {
         try {
           const addrResp = await fetchWithTimeout(
@@ -113,9 +114,12 @@ async function fetchNoteDetail(
           if (addrResp.ok) {
             const addrData = (await addrResp.json()) as { data?: Record<string, unknown> };
             const addrRecord = addrData?.data ?? addrData as Record<string, unknown>;
-            // freifeld5 is the raw field name for ADRESSE_FREIFELD5
+            // freifeld5 = EOID, freifeld6 = FID (facility identifier)
             const eoidValue = String(
               addrRecord?.freifeld5 ?? addrRecord?.FREIFELD5 ?? addrRecord?.adresse_freifeld5 ?? ""
+            ).trim();
+            const fidValue = String(
+              addrRecord?.freifeld6 ?? addrRecord?.FREIFELD6 ?? addrRecord?.adresse_freifeld6 ?? ""
             ).trim();
             if (eoidValue) {
               // Normalise into the freeFields array shape that dataMapper expects
@@ -124,6 +128,13 @@ async function fetchNoteDetail(
             } else {
               console.log(`[Poller] freifeld5 empty for address ${addressId} — EOID will be missing`);
             }
+            if (fidValue) {
+              console.log(`[Poller] FID from freifeld6 for address ${addressId}: "${fidValue}"`);
+            } else {
+              console.log(`[Poller] freifeld6 empty for address ${addressId} — FID will be missing`);
+            }
+            // FID is stored separately and passed as a top-level customer.fid property
+            fidFromAddress = fidValue || undefined;
           }
         } catch {
           // Address lookup unavailable — EOID will be missing, mapping will flag it
@@ -149,6 +160,7 @@ async function fetchNoteDetail(
             countryCode: docAddr?.country ?? "",
           },
           freeFields,
+          fid: fidFromAddress,
         },
       };
     }

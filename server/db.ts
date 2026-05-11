@@ -72,6 +72,7 @@ export async function upsertDeliveryNote(note: InsertDeliveryNote) {
         customerId: note.customerId,
         customerName: note.customerName,
         eoid: note.eoid,
+        fid: note.fid,
         addressStreet: note.addressStreet,
         addressCity: note.addressCity,
         addressPostalCode: note.addressPostalCode,
@@ -79,6 +80,7 @@ export async function upsertDeliveryNote(note: InsertDeliveryNote) {
         rawPayload: note.rawPayload,
         osapiensSalesOrder: note.osapiensSalesOrder,
         qrCodeDataUrl: note.qrCodeDataUrl,
+        dispatchQrText: note.dispatchQrText,
         status: note.status,
         errorMessage: note.errorMessage,
         deliveryDate: note.deliveryDate,
@@ -197,8 +199,12 @@ export async function updateDeliveryNoteStatus(
     status: "pending" | "ready" | "error";
     osapiensSalesOrder?: unknown;
     qrCodeDataUrl?: string | null;
+    /** Plain text OSAPV1EDP dispatch QR string */
+    dispatchQrText?: string | null;
     errorMessage?: string | null;
     eoid?: string | null;
+    /** Customer Facility ID from Xentral freifeld6 */
+    fid?: string | null;
     customerName?: string | null;
     addressStreet?: string | null;
     addressCity?: string | null;

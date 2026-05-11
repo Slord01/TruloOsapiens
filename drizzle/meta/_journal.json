@@ -22,6 +22,13 @@
       "when": 1778152262334,
       "tag": "0002_hard_spencer_smythe",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1778529442504,
+      "tag": "0003_graceful_switch",
+      "breakpoints": true
     }
   ]
 }
