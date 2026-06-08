@@ -122,3 +122,17 @@
 - [x] Add paymentMethod and deliveryMethod to QR code payload (fields 13 and 14, currently empty)
 - [x] Update OrderDetail.tsx: show payment method, delivery method, and order value in the UI
 - [x] Update Vitest tests for new fields
+
+## Phase 14 — Osapiens Dispatch Event API Integration
+
+- [x] Read Osapiens spec Section 4.8 to understand dispatch event payload structure
+- [x] Add `sentToOsapiens` (boolean), `sentAt` (timestamp), `osapiensSendError` (text) columns to delivery_notes
+- [x] Apply migration SQL via webdev_execute_sql
+- [x] Build `server/osapiensSender.ts`: construct EPCIS dispatch event payload and POST to Osapiens API
+- [x] Add placeholder secrets: OSAPIENS_API_URL, OSAPIENS_USERNAME, OSAPIENS_PASSWORD, OSAPIENS_CUSTOMER, OSAPIENS_APPLICATION, OSAPIENS_OUR_EOID, OSAPIENS_OUR_FID
+- [x] Add tRPC procedure: `orders.sendToOsapiens` (admin only) — calls osapiensSender and updates DB status
+- [x] Add "Send to Osapiens" button on each order card in Orders.tsx (list view)
+- [x] Add "Send to Osapiens" button on OrderDetail.tsx (detail view)
+- [x] Show "Sent" badge / timestamp on order cards and detail view when sentToOsapiens = true
+- [x] Show error message on card/detail if osapiensSendError is set
+- [x] Update Vitest tests for new procedure and sender logic

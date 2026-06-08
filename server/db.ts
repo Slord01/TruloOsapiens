@@ -198,6 +198,25 @@ export async function bulkDeleteDeliveryNotesByStatus(
   return ids.length;
 }
 
+export async function markSentToOsapiens(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(deliveryNotes).set({
+    sentToOsapiens: true,
+    sentToOsapiensAt: Date.now(),
+    osapiensSendError: null,
+  } as any).where(eq(deliveryNotes.id, id));
+}
+
+export async function markOsapiensSendError(id: number, error: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(deliveryNotes).set({
+    sentToOsapiens: false,
+    osapiensSendError: error,
+  } as any).where(eq(deliveryNotes.id, id));
+}
+
 export async function updateDeliveryNoteStatus(
   id: number,
   update: {

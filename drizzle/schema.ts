@@ -7,6 +7,8 @@ import {
   varchar,
   json,
   decimal,
+  boolean,
+  bigint,
 } from "drizzle-orm/mysql-core";
 
 export const users = mysqlTable("users", {
@@ -68,6 +70,12 @@ export const deliveryNotes = mysqlTable("delivery_notes", {
   osapiensSalesOrder: json("osapiensSalesOrder"),
   /** Base64-encoded QR code PNG (null if generation failed) */
   qrCodeDataUrl: text("qrCodeDataUrl"),
+  /** Whether this order has been sent to Osapiens via the dispatch API */
+  sentToOsapiens: boolean("sentToOsapiens").default(false),
+  /** Unix timestamp (ms) when the order was sent to Osapiens */
+  sentToOsapiensAt: bigint("sentToOsapiensAt", { mode: "number" }),
+  /** Error message from last Osapiens send attempt (null if successful) */
+  osapiensSendError: text("osapiensSendError"),
   /** Processing status */
   status: mysqlEnum("status", ["pending", "ready", "error"]).default("pending").notNull(),
   /** Human-readable error message if status = error */

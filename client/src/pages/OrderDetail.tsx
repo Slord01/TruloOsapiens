@@ -16,6 +16,8 @@ import {
   Download,
   CreditCard,
   Truck,
+  Send,
+  CheckCircle2,
 } from "lucide-react";
 
 interface OrderDetailProps {
@@ -59,6 +61,19 @@ export default function OrderDetail({ id }: OrderDetailProps) {
     { id: numId },
     { enabled: !isNaN(numId) }
   );
+
+  const utils = trpc.useUtils();
+
+  const sendToOsapiensMutation = trpc.orders.sendToOsapiens.useMutation({
+    onSuccess: () => {
+      toast.success("Dispatch event sent to Osapiens successfully");
+      refetch();
+    },
+    onError: (err) => {
+      toast.error(`Send to Osapiens failed: ${err.message}`);
+      refetch(); // Refresh to show the error message
+    },
+  });
 
   const retryMutation = trpc.orders.retry.useMutation({
     onSuccess: (result) => {
@@ -137,18 +152,42 @@ export default function OrderDetail({ id }: OrderDetailProps) {
               {note.customerName || "Unknown customer"}
             </p>
           </div>
-          {status === "error" && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => retryMutation.mutate({ id: numId })}
-              disabled={retryMutation.isPending}
-              className="gap-2 border-border text-foreground hover:bg-accent flex-shrink-0"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${retryMutation.isPending ? "animate-spin" : ""}`} />
-              Retry / Re-fetch
-            </Button>
-          )}
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {status === "error" && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => retryMutation.mutate({ id: numId })}
+                disabled={retryMutation.isPending}
+                className="gap-2 border-border text-foreground hover:bg-accent"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${retryMutation.isPending ? "animate-spin" : ""}`} />
+                Retry / Re-fetch
+              </Button>
+            )}
+            {status === "ready" && (
+              <Button
+                size="sm"
+                variant={note.sentToOsapiens ? "outline" : "default"}
+                onClick={() => sendToOsapiensMutation.mutate({ id: numId })}
+                disabled={sendToOsapiensMutation.isPending}
+                className={`gap-2 ${
+                  note.sentToOsapiens
+                    ? "border-[oklch(0.65_0.18_145)] text-[oklch(0.65_0.18_145)] hover:bg-[oklch(0.20_0.06_145)]"
+                    : ""
+                }`}
+              >
+                {sendToOsapiensMutation.isPending ? (
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                ) : note.sentToOsapiens ? (
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                ) : (
+                  <Send className="h-3.5 w-3.5" />
+                )}
+                {note.sentToOsapiens ? "Resend to Osapiens" : "Send to Osapiens"}
+              </Button>
+            )}
+          </div>
         </div>
       </header>
 
@@ -332,6 +371,67 @@ export default function OrderDetail({ id }: OrderDetailProps) {
             )}
           </div>
         </div>
+
+        {/* ── Osapiens Send Status ── */}
+        {status === "ready" && (
+          <div className="mt-4">
+            {(note as {sentToOsapiens?: boolean | null}).sentToOsapiens ? (
+              <div className="rounded-xl border border-[oklch(0.65_0.18_145_/_0.4)] bg-[oklch(0.20_0.06_145_/_0.3)] px-4 py-3 flex items-center gap-3">
+                <CheckCircle2 className="h-4 w-4 text-[oklch(0.65_0.18_145)] flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-[oklch(0.65_0.18_145)]">
+                    Dispatch event sent to Osapiens
+                  </p>
+                  {(note as {sentToOsapiensAt?: number | null}).sentToOsapiensAt && (
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Sent {new Date((note as {sentToOsapiensAt: number}).sentToOsapiensAt).toLocaleString()}
+                    </p>
+                  )}
+                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => sendToOsapiensMutation.mutate({ id: numId })}
+                  disabled={sendToOsapiensMutation.isPending}
+                  className="text-muted-foreground hover:text-foreground text-xs h-7 px-2 flex-shrink-0"
+                >
+                  {sendToOsapiensMutation.isPending ? (
+                    <RefreshCw className="h-3 w-3 animate-spin mr-1" />
+                  ) : (
+                    <Send className="h-3 w-3 mr-1" />
+                  )}
+                  Resend
+                </Button>
+              </div>
+            ) : (note as {osapiensSendError?: string | null}).osapiensSendError ? (
+              <div className="rounded-xl border border-[oklch(0.62_0.22_25_/_0.4)] bg-[oklch(0.18_0.06_25_/_0.3)] px-4 py-3 flex items-start gap-3">
+                <AlertCircle className="h-4 w-4 text-[oklch(0.62_0.22_25)] flex-shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-[oklch(0.62_0.22_25)]">
+                    Failed to send to Osapiens
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5 break-words">
+                    {(note as {osapiensSendError: string}).osapiensSendError}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => sendToOsapiensMutation.mutate({ id: numId })}
+                  disabled={sendToOsapiensMutation.isPending}
+                  className="text-muted-foreground hover:text-foreground text-xs h-7 px-2 flex-shrink-0"
+                >
+                  {sendToOsapiensMutation.isPending ? (
+                    <RefreshCw className="h-3 w-3 animate-spin mr-1" />
+                  ) : (
+                    <RefreshCw className="h-3 w-3 mr-1" />
+                  )}
+                  Retry
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        )}
       </main>
     </div>
   );

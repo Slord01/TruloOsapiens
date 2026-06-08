@@ -4,7 +4,8 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
-import { listDeliveryNotes, getDeliveryNoteById, deleteDeliveryNote, bulkDeleteDeliveryNotesByStatus } from "./db";
+import { listDeliveryNotes, getDeliveryNoteById, deleteDeliveryNote, bulkDeleteDeliveryNotesByStatus, markSentToOsapiens, markOsapiensSendError } from "./db";
+import { sendDispatchToOsapiens, isOsapiensConfigured } from "./osapiensSender";
 import { refreshProductCache, getCacheStats } from "./productCache";
 import { retryDeliveryNote } from "./webhookProcessor";
 import { fetchAndProcessDeliveryNotes, fetchDeliveryNoteByDocumentNumber } from "./xentralPoller";
@@ -49,9 +50,13 @@ export const appRouter = router({
             xentralNumber: n.xentralNumber,
             customerName: n.customerName,
             eoid: n.eoid,
+            fid: n.fid,
             status: n.status,
             errorMessage: n.errorMessage,
             deliveryDate: n.deliveryDate,
+            sentToOsapiens: n.sentToOsapiens,
+            sentToOsapiensAt: n.sentToOsapiensAt,
+            osapiensSendError: n.osapiensSendError,
             createdAt: n.createdAt,
             updatedAt: n.updatedAt,
           })),
@@ -90,6 +95,9 @@ export const appRouter = router({
             addressCountry: note.addressCountry,
             deliveryDate: note.deliveryDate,
             items: note.items,
+            sentToOsapiens: note.sentToOsapiens,
+            sentToOsapiensAt: note.sentToOsapiensAt,
+            osapiensSendError: note.osapiensSendError,
             osapiensSalesOrder: null, // hidden from warehouse
             rawPayload: null,
           };
@@ -133,6 +141,31 @@ export const appRouter = router({
         const result = await fetchDeliveryNoteByDocumentNumber(input.documentNumber);
         return result;
       }),
+
+    /**
+     * Send a dispatch event for a delivery note to the Osapiens API.
+     * Available to all authenticated users (not admin-only).
+     */
+    sendToOsapiens: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        const result = await sendDispatchToOsapiens(input.id);
+        if (result.success) {
+          await markSentToOsapiens(input.id);
+          return { success: true, message: "Dispatch event sent to Osapiens successfully" };
+        } else {
+          await markOsapiensSendError(input.id, result.error ?? "Unknown error");
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: result.error ?? "Failed to send to Osapiens",
+          });
+        }
+      }),
+
+    /** Check if Osapiens credentials are configured */
+    osapiensStatus: protectedProcedure.query(() => {
+      return { configured: isOsapiensConfigured() };
+    }),
 
     /** Delete a single delivery note by DB id (admin only). */
     delete: adminProcedure

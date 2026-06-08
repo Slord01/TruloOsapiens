@@ -27,6 +27,8 @@ import {
   Download,
   Database,
   Trash2,
+  Send,
+  CheckCircle2,
 } from "lucide-react";
 
 const PAGE_SIZE = 20;
@@ -127,6 +129,17 @@ export default function Orders() {
     },
     onError: (err) => {
       toast.error(`Bulk delete failed: ${err.message}`);
+    },
+  });
+
+  // Send a single order to Osapiens
+  const sendToOsapiensMutation = trpc.orders.sendToOsapiens.useMutation({
+    onSuccess: (_data, variables) => {
+      utils.orders.list.invalidate();
+      toast.success("Dispatch event sent to Osapiens");
+    },
+    onError: (err) => {
+      toast.error(`Send to Osapiens failed: ${err.message}`);
     },
   });
 
@@ -388,18 +401,42 @@ export default function Orders() {
                   </div>
                 </button>
 
-                {/* Per-row delete button — appears on hover */}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    deleteMutation.mutate({ id: note.id });
-                  }}
-                  disabled={deleteMutation.isPending && deleteMutation.variables?.id === note.id}
-                  className="absolute top-1/2 -translate-y-1/2 right-3 opacity-0 group-hover:opacity-100 transition-opacity h-7 w-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-[oklch(0.62_0.22_25)] hover:bg-[oklch(0.18_0.06_25)]"
-                  title="Remove this order"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
+                {/* Per-row action buttons — appear on hover */}
+                <div className="absolute top-1/2 -translate-y-1/2 right-3 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  {/* Send to Osapiens — only shown for READY orders */}
+                  {note.status === "ready" && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        sendToOsapiensMutation.mutate({ id: note.id });
+                      }}
+                      disabled={sendToOsapiensMutation.isPending && sendToOsapiensMutation.variables?.id === note.id}
+                      className={`h-7 w-7 rounded-lg flex items-center justify-center transition-colors ${
+                        note.sentToOsapiens
+                          ? "text-[oklch(0.65_0.18_145)] bg-[oklch(0.20_0.06_145)]"
+                          : "text-muted-foreground hover:text-[oklch(0.65_0.18_145)] hover:bg-[oklch(0.20_0.06_145)]"
+                      }`}
+                      title={note.sentToOsapiens ? "Already sent to Osapiens — click to resend" : "Send to Osapiens"}
+                    >
+                      {note.sentToOsapiens ? (
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                      ) : (
+                        <Send className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  )}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteMutation.mutate({ id: note.id });
+                    }}
+                    disabled={deleteMutation.isPending && deleteMutation.variables?.id === note.id}
+                    className="h-7 w-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-[oklch(0.62_0.22_25)] hover:bg-[oklch(0.18_0.06_25)]"
+                    title="Remove this order"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               </div>
             ))}
           </div>

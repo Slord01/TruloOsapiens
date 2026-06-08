@@ -1,0 +1,9 @@
+{
+  "query": "ALTER TABLE `delivery_notes` ADD `sentToOsapiens` boolean DEFAULT false;\nALTER TABLE `delivery_notes` ADD `sentToOsapiensAt` bigint;\nALTER TABLE `delivery_notes` ADD `osapiensSendError` text;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway03.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 26t7xFUodfTYuBK.953635c07da9 --database NgFij54VfzxFZ4enRLyVW9 --execute ALTER TABLE `delivery_notes` ADD `sentToOsapiens` boolean DEFAULT false;\nALTER TABLE `delivery_notes` ADD `sentToOsapiensAt` bigint;\nALTER TABLE `delivery_notes` ADD `osapiensSendError` text;",
+  "rows": [],
+  "messages": [],
+  "stdout": "",
+  "stderr": "",
+  "execution_time_ms": 1029
+}
