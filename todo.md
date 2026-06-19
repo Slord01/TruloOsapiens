@@ -136,3 +136,15 @@
 - [x] Show "Sent" badge / timestamp on order cards and detail view when sentToOsapiens = true
 - [x] Show error message on card/detail if osapiensSendError is set
 - [x] Update Vitest tests for new procedure and sender logic
+
+## Phase 15 — Osapiens Sales Order API (Correct Integration)
+
+- [x] Discover correct Osapiens customer ID: trulodistro (from portal URL)
+- [x] Identify correct API user: api@trulodistro.com (dedicated API user with API Admin role)
+- [x] Update OSAPIENS_USERNAME secret to api@trulodistro.com
+- [x] Register TRULO GmbH scanning location in Osapiens portal (FID: QCBDR<1DE538913929428)
+- [x] Rewrite osapiensSender.ts: replace dispatch event (capture-json) with Sales Order (masterdata-v1)
+- [x] Add ensureDeliveryPoint(): auto-creates customer Organisation + DeliveryPoint before SalesOrder
+- [x] Remove non-spec fields (DeliveryMethod, PaymentMethod, OrderValue) from SalesOrder payload
+- [x] End-to-end test: Sales Order created successfully in Osapiens live system (HTTP 200)
+- [x] All 33 Vitest tests passing

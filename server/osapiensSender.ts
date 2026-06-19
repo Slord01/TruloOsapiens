@@ -1,10 +1,13 @@
 /**
  * osapiensSender.ts
  *
- * Sends a dispatch event to the Osapiens REST API using the v2.5 JSON format.
- * Endpoint: POST [OSAPIENS_API_URL]/data/in/rest/[CUSTOMER]/[APPLICATION]/capture-json
- * Auth: HTTP Basic Auth with "un." prefix on username
- * Spec: TNT_OS_INTERFACES_TECHNICAL-SPEC_v.2.5.pdf Section 3.8
+ * Creates a Sales Order in the Osapiens masterdata API so that warehouse staff
+ * can open the order in the Osapiens mobile app, scan T&T codes against it, and
+ * have Osapiens automatically match the codes to the order and customer.
+ *
+ * Endpoint: POST [OSAPIENS_API_URL]/data/in/rest/[CUSTOMER]/tpd/masterdata-v1
+ * Auth:     HTTP Basic Auth with "un." prefix on username
+ * Spec:     TNT_OS_INTERFACES_TECHNICAL-SPEC_v.2.5.pdf Section 5.8
  */
 
 import { getDeliveryNoteById } from "./db";
@@ -16,128 +19,217 @@ function getOsapiensConfig() {
   const username = process.env.OSAPIENS_USERNAME ?? "";
   const password = process.env.OSAPIENS_PASSWORD ?? "";
   const customer = process.env.OSAPIENS_CUSTOMER ?? "";
-  // Application defaults to "tpd" (Tobacco Products Directive) if not set
-  const application = process.env.OSAPIENS_APPLICATION ?? "tpd";
-  const ourEoid = process.env.OSAPIENS_OUR_EOID ?? "";
   const ourFid = process.env.OSAPIENS_OUR_FID ?? "";
 
-  return { apiUrl, username, password, customer, application, ourEoid, ourFid };
+  return { apiUrl, username, password, customer, ourFid };
 }
 
 export function isOsapiensConfigured(): boolean {
   const cfg = getOsapiensConfig();
-  return !!(cfg.apiUrl && cfg.username && cfg.password && cfg.customer && cfg.ourEoid && cfg.ourFid);
+  return !!(cfg.apiUrl && cfg.username && cfg.password && cfg.customer && cfg.ourFid);
 }
 
 // ─── Payload builder ──────────────────────────────────────────────────────────
 
-interface DispatchEventInput {
-  /** Customer FID (destination facility) */
-  customerFid: string;
-  /** Delivery note number used as the desadv bizTransaction */
-  deliveryNoteNumber: string;
-  /** Dispatch date-time in ISO 8601 format */
-  eventTime: string;
-  /** Timezone offset string e.g. "+01:00" */
-  eventTimeZoneOffset: string;
-  /** Our company EOID */
-  ourEoid: string;
-  /** Our facility FID */
-  ourFid: string;
-  /** Transport mode: 0=Other,1=Sea,2=Rail,3=Road,4=Air,5=Postal,7=Fixed,8=Inland */
-  transportMode?: number;
-  /** Vehicle identifier */
-  transportVehicle?: string;
-  /** SSCC container code */
-  transportCont2?: string;
-  /** Whether we have our own tracking system */
-  transportS1?: boolean;
-  /** Tracking number (required if transportS1=true) */
-  transportS2?: string;
-  /** EMCS Administrative Reference Code */
-  emcsARC?: string;
-  /** SAAD reference number */
-  saadNumber?: string;
-  /** MRN (Movement Reference Number / export declaration) */
-  expDeclarationNumber?: string;
-  /** Comment */
-  comment?: string;
-  /** Destination type: 1=non-EU, 2=fixed qty EU, 3=vending machine EU, 4=vending van EU */
-  destinationID1?: number;
-  /** Customer name (optional) */
-  customerName?: string;
-}
-
-function buildDispatchPayload(input: DispatchEventInput): object {
+function buildSalesOrderPayload(note: {
+  xentralNumber: string;
+  customerName: string | null;
+  eoid: string | null;
+  fid: string | null;
+  addressStreet: string | null;
+  addressCity: string | null;
+  addressPostalCode: string | null;
+  addressCountry: string | null;
+  deliveryDate: string | null;
+  deliveryMethod: string | null;
+  paymentMethod: string | null;
+  orderValue: string | null;
+  orderCurrency: string | null;
+  items: Array<{
+    productNumber: string | null;
+    productName: string | null;
+    ean: string | null;
+    quantity: string | null;
+    unitPrice: string | null;
+    currency: string | null;
+  }>;
+}, ourFid: string): object {
   const now = new Date().toISOString();
 
+  // Map line items to Osapiens OrderItems
+  const orderItems = note.items.map((item) => ({
+    Name: item.productName ?? "",
+    Sku: item.productNumber ?? "",
+    UnitGtin: item.ean ?? "",
+    OrderedQty: item.quantity ? parseFloat(item.quantity) : 0,
+    // CaseGtin / BundleGtin not available from Xentral — leave empty
+    CaseGtin: "",
+    CaseQty: 0,
+    BundleGtin: "",
+    BundleQty: 0,
+    OrderLevel: "unit",
+  }));
+
   return {
-    type: "EPCISDocument",
-    schemaVersion: "1.2",
-    creationDate: now,
-    epcisBody: {
-      eventList: [
-        {
-          type: "ObjectEvent",
-          eventTime: input.eventTime,
-          eventTimeZoneOffset: input.eventTimeZoneOffset,
-          action: "OBSERVE",
-          bizStep: "urn:epcglobal:cbv:bizstep:shipping",
-          parentID: "",
-          "fit:comment": input.comment ?? "",
-          "fit:aggregationType": 0,
-          "fit:productReturn": false,
-          "fit:uiType": 0,
-          "fit:destinationID1": input.destinationID1 ?? 2, // 2 = fixed quantity EU delivery
-          "fit:destinationID5CountryCode": "",
-          "fit:destinationID5City": "",
-          "fit:destinationID5Name": input.customerName ?? "",
-          "fit:destinationID5PostalCode": "",
-          "fit:destinationID5StreetAddressOne": "",
-          "fit:destinationID5StreetAddressTwo": "",
-          "fit:transportMode": input.transportMode ?? 3, // 3 = Road transport (default)
-          "fit:transportVehicle": input.transportVehicle ?? "",
-          "fit:transportS1": input.transportS1 ?? false,
-          "fit:transportS2": input.transportS2 ?? "",
-          "fit:saadNumber": input.saadNumber ?? "",
-          "fit:expDeclarationNumber": input.expDeclarationNumber ?? "",
-          "fit:transportCont2": input.transportCont2 ?? "",
-          "fit:emcsARC": input.emcsARC ?? "",
-          epcList: [], // Empty — warehouse staff scan individual T&T codes separately
-          childEPCs: null,
-          readPoint: {
-            "fit:fid": input.ourFid,
-            id: "",
-          },
-          bizLocation: {
-            id: "",
-          },
-          bizTransactionList: [
-            {
-              type: "urn:osapiens:tpd:businessTransactionId",
-              bizTransaction: input.deliveryNoteNumber,
-            },
-            {
-              type: "urn:epcglobal:cbv:btt:desadv",
-              bizTransaction: input.deliveryNoteNumber,
-            },
-          ],
-          "fit:eoid": {
-            "fit:epc": input.ourEoid,
-          },
-          "fit:destinationIDList": [
-            {
-              destinationID: {
-                epc: input.customerFid,
-                gs1ElementString: "",
-                type: input.destinationID1 ?? 2,
-              },
-            },
-          ],
-        },
-      ],
+    object: "SalesOrder",
+    action: "Create",
+    // KEY is the primary key in Osapiens — use the Xentral delivery note number
+    key: note.xentralNumber,
+    data: {
+      OrderNumber: note.xentralNumber,
+      CreationDate: now,
+      DeliveryDate: note.deliveryDate ?? "",
+      State: "CREATED",
+      SendingSystem: "TNT-Bridge",
+
+      // Sold-to party = the customer
+      SoldToParty: {
+        Name: note.customerName ?? "",
+        EoId: note.eoid ?? "",
+        Address: note.addressStreet ?? "",
+        City: note.addressCity ?? "",
+        Zip: note.addressPostalCode ?? "",
+        Country: note.addressCountry ?? "",
+        ExternalReference: "",
+      },
+
+      // Delivery point = customer FID (destination facility)
+      DeliveryPoint: {
+        FacilityId: note.fid ?? "",
+        Name: note.customerName ?? "",
+        Address: note.addressStreet ?? "",
+        City: note.addressCity ?? "",
+        Zip: note.addressPostalCode ?? "",
+        Country: note.addressCountry ?? "",
+        ExternalReference: "",
+      },
+
+      // Scanning point = our warehouse (where staff will scan)
+      ScanningPoint: {
+        FacilityId: ourFid,
+        Address: "",
+        City: "",
+        Zip: "",
+        Country: "DE",
+        ExternalReference: "",
+        Name: "Trulo GmbH Warehouse",
+      },
+
+      // Order line items
+      OrderItems: orderItems,
+
+      // Scanning progress — empty at creation, filled by mobile app
+      OverallScannedCodes: [],
+      CurrentlyScannedCodes: [],
+      PickedItems: {},
+      FinishedAt: "",
     },
   };
+}
+
+// ─── Delivery Point upsert ───────────────────────────────────────────────────
+
+/**
+ * Ensure the customer's Delivery Point exists in Osapiens.
+ * Uses the customer FID as the KEY. Creates if missing, updates if present.
+ * This is required before a SalesOrder can reference the DeliveryPoint.
+ */
+async function ensureDeliveryPoint(
+  endpoint: string,
+  authHeader: string,
+  note: {
+    fid: string;
+    eoid: string | null;
+    customerName: string | null;
+    addressStreet: string | null;
+    addressCity: string | null;
+    addressPostalCode: string | null;
+    addressCountry: string | null;
+  }
+): Promise<void> {
+  // Step 1: Ensure the customer Organisation exists (required before DeliveryPoint)
+  const orgKey = note.eoid ?? note.fid;
+  const orgReadResp = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: authHeader },
+    body: JSON.stringify({ object: "Organization", action: "Read", key: orgKey }),
+  });
+  const orgReadJson = (await orgReadResp.json()) as { error?: boolean };
+
+  if (orgReadJson.error !== false) {
+    // Organisation doesn't exist — create it
+    const orgCreateResp = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: authHeader },
+      body: JSON.stringify({
+        object: "Organization",
+        action: "Create",
+        key: orgKey,
+        data: {
+          Name: note.customerName ?? orgKey,
+          Eoid: note.eoid ?? "",
+          isTpdRelevant: true,
+          IsDefault: false,
+          Address: {
+            Country: note.addressCountry ?? "",
+            PostalCode: note.addressPostalCode ?? "",
+            Street: note.addressStreet ?? "",
+            StreetNumber: "",
+            City: note.addressCity ?? "",
+          },
+        },
+      }),
+    });
+    const orgCreateJson = (await orgCreateResp.json()) as { error?: boolean; message?: string };
+    if (orgCreateJson.error) {
+      console.warn(`[Osapiens] Organization Create warning for ${orgKey}:`, orgCreateJson.message);
+    } else {
+      console.log(`[Osapiens] Organization created for EOID: ${orgKey}`);
+    }
+  }
+
+  // Step 2: Upsert the DeliveryPoint — use FID as the KEY
+  const dpKey = note.fid;
+  const dpReadResp = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: authHeader },
+    body: JSON.stringify({ object: "DeliveryPoint", action: "Read", key: dpKey }),
+  });
+  const dpReadJson = (await dpReadResp.json()) as { error?: boolean };
+
+  const action = dpReadJson.error === false ? "Update" : "Create";
+
+  const upsertResp = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: authHeader },
+    body: JSON.stringify({
+      object: "DeliveryPoint",
+      action,
+      key: dpKey,
+      data: {
+        EU: true,
+        Fid: note.fid,
+        ExternalRefNumber: note.fid,
+        Eoid: note.eoid ?? "",
+        Gln: "",
+        VAT: "",
+        Name: note.customerName ?? note.fid,
+        Address: {
+          Country: note.addressCountry ?? "",
+          PostalCode: note.addressPostalCode ?? "",
+          Street: note.addressStreet ?? "",
+          StreetNumber: "",
+          City: note.addressCity ?? "",
+        },
+      },
+    }),
+  });
+  const upsertJson = (await upsertResp.json()) as { error?: boolean; message?: string };
+  if (upsertJson.error) {
+    console.warn(`[Osapiens] DeliveryPoint ${action} warning:`, upsertJson.message);
+  } else {
+    console.log(`[Osapiens] DeliveryPoint ${action} OK for FID: ${note.fid}`);
+  }
 }
 
 // ─── Sender ───────────────────────────────────────────────────────────────────
@@ -150,7 +242,8 @@ export interface SendResult {
 }
 
 /**
- * Send a dispatch event for a delivery note to the Osapiens API.
+ * Send a Sales Order to the Osapiens masterdata API for a given delivery note.
+ * Warehouse staff then open the order in the Osapiens mobile app and scan T&T codes.
  * Returns a result object — never throws.
  */
 export async function sendDispatchToOsapiens(deliveryNoteId: number): Promise<SendResult> {
@@ -159,18 +252,20 @@ export async function sendDispatchToOsapiens(deliveryNoteId: number): Promise<Se
   if (!cfg.apiUrl || !cfg.username || !cfg.password || !cfg.customer) {
     return {
       success: false,
-      error: "Osapiens API credentials are not configured. Please add OSAPIENS_API_URL, OSAPIENS_USERNAME, OSAPIENS_PASSWORD, and OSAPIENS_CUSTOMER in the app secrets.",
+      error:
+        "Osapiens API credentials are not configured. Please add OSAPIENS_API_URL, OSAPIENS_USERNAME, OSAPIENS_PASSWORD, and OSAPIENS_CUSTOMER in the app secrets.",
     };
   }
 
-  if (!cfg.ourEoid || !cfg.ourFid) {
+  if (!cfg.ourFid) {
     return {
       success: false,
-      error: "Our company EOID and FID are not configured. Please add OSAPIENS_OUR_EOID and OSAPIENS_OUR_FID in the app secrets.",
+      error:
+        "Our warehouse FID is not configured. Please add OSAPIENS_OUR_FID in the app secrets.",
     };
   }
 
-  // Fetch the delivery note from DB
+  // Fetch the delivery note (with line items) from DB
   const note = await getDeliveryNoteById(deliveryNoteId);
   if (!note) {
     return { success: false, error: `Delivery note ${deliveryNoteId} not found` };
@@ -190,33 +285,37 @@ export async function sendDispatchToOsapiens(deliveryNoteId: number): Promise<Se
     };
   }
 
-  // Build event time from delivery date or now
-  const eventDate = note.deliveryDate ? new Date(note.deliveryDate) : new Date();
-  const eventTime = eventDate.toISOString();
-  // Determine timezone offset — default to +01:00 (CET) for European operations
-  const eventTimeZoneOffset = "+01:00";
-
-  const payload = buildDispatchPayload({
-    customerFid: note.fid,
-    deliveryNoteNumber: note.xentralNumber,
-    eventTime,
-    eventTimeZoneOffset,
-    ourEoid: cfg.ourEoid,
-    ourFid: cfg.ourFid,
-    customerName: note.customerName ?? undefined,
-    transportMode: 3, // Road transport default
-  });
-
-  // Build endpoint URL
-  const endpoint = `${cfg.apiUrl.replace(/\/$/, "")}/data/in/rest/${cfg.customer}/${cfg.application}/capture-json`;
-
-  // Build Basic Auth header — username must be prefixed with "un."
+  // Ensure the customer's Delivery Point exists in Osapiens before creating the Sales Order
+  const endpoint = `${cfg.apiUrl.replace(/\/$/, "")}/data/in/rest/${cfg.customer}/tpd/masterdata-v1`;
   const authString = `un.${cfg.username}:${cfg.password}`;
   const authHeader = `Basic ${Buffer.from(authString).toString("base64")}`;
 
-  console.log(`[Osapiens] Sending dispatch event for delivery note ${note.xentralNumber} (DB id: ${deliveryNoteId})`);
+  try {
+    await ensureDeliveryPoint(endpoint, authHeader, {
+      fid: note.fid,
+      eoid: note.eoid,
+      customerName: note.customerName,
+      addressStreet: note.addressStreet,
+      addressCity: note.addressCity,
+      addressPostalCode: note.addressPostalCode,
+      addressCountry: note.addressCountry,
+    });
+  } catch (dpErr) {
+    console.warn("[Osapiens] Could not upsert DeliveryPoint:", dpErr);
+    // Non-fatal — attempt the SalesOrder anyway
+  }
+
+  const payload = buildSalesOrderPayload(note, cfg.ourFid);
+
+  // Endpoint and auth already built above
+
+  console.log(
+    `[Osapiens] Creating Sales Order for delivery note ${note.xentralNumber} (DB id: ${deliveryNoteId})`
+  );
   console.log(`[Osapiens] Endpoint: ${endpoint}`);
-  console.log(`[Osapiens] Customer FID: ${note.fid}, Our EOID: ${cfg.ourEoid}, Our FID: ${cfg.ourFid}`);
+  console.log(
+    `[Osapiens] Customer: ${note.customerName}, FID: ${note.fid}, EOID: ${note.eoid}`
+  );
 
   try {
     const response = await fetch(endpoint, {
@@ -229,7 +328,9 @@ export async function sendDispatchToOsapiens(deliveryNoteId: number): Promise<Se
     });
 
     const responseBody = await response.text();
-    console.log(`[Osapiens] Response: ${response.status} — ${responseBody.substring(0, 200)}`);
+    console.log(
+      `[Osapiens] Response: ${response.status} — ${responseBody.substring(0, 200)}`
+    );
 
     if (response.ok) {
       return { success: true, statusCode: response.status, responseBody };
