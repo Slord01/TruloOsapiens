@@ -214,6 +214,8 @@ async function ensureDeliveryPoint(
         Gln: "",
         VAT: "",
         Name: note.customerName ?? note.fid,
+        // OrganizationRef links this delivery point to the customer's organisation (required by Osapiens)
+        ...(action === "Create" ? { OrganizationRef: orgKey } : {}),
         Address: {
           Country: note.addressCountry ?? "",
           PostalCode: note.addressPostalCode ?? "",
