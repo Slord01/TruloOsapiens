@@ -188,26 +188,19 @@ async function ensureDeliveryPoint(
     }
   }
 
-  // Step 2: Upsert the DeliveryPoint.
-  // Use "dp-{fid}" as the KEY to avoid collisions with other facility types
-  // (e.g. Scanning Locations) that may already be registered under the raw FID.
-  // The FID value itself is stored in the Fid field and is what the SalesOrder references.
-  const dpKey = `dp-${note.fid}`;
-  const dpReadResp = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: authHeader },
-    body: JSON.stringify({ object: "DeliveryPoint", action: "Read", key: dpKey }),
-  });
-  const dpReadJson = (await dpReadResp.json()) as { error?: boolean };
+  // Step 2: Create the DeliveryPoint with a unique key (fid + timestamp).
+  // We always Create (never Update) to avoid ghost-record collisions — Osapiens sometimes
+  // returns error:false with data:null for keys that are in a corrupted state, causing
+  // Update to fail with "is not a delivery point". A unique key guarantees a clean Create.
+  // The FID value in the data is what the SalesOrder references, not the KEY.
+  const dpKey = `dp-${note.fid}-${Date.now()}`;
 
-  const action = dpReadJson.error === false ? "Update" : "Create";
-
-  const upsertResp = await fetch(endpoint, {
+  const createResp = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: authHeader },
     body: JSON.stringify({
       object: "DeliveryPoint",
-      action,
+      action: "Create",
       key: dpKey,
       data: {
         EU: true,
@@ -218,7 +211,7 @@ async function ensureDeliveryPoint(
         VAT: "",
         Name: note.customerName ?? note.fid,
         // OrganizationRef links this delivery point to the customer's organisation (required by Osapiens)
-        ...(action === "Create" ? { OrganizationRef: orgKey } : {}),
+        OrganizationRef: orgKey,
         Address: {
           Country: note.addressCountry ?? "",
           PostalCode: note.addressPostalCode ?? "",
@@ -229,17 +222,11 @@ async function ensureDeliveryPoint(
       },
     }),
   });
-  const upsertJson = (await upsertResp.json()) as { error?: boolean; message?: string };
-  if (upsertJson.error) {
-    if (action === "Create") {
-      // Create failure is fatal — the SalesOrder will fail without a registered DeliveryPoint
-      throw new Error(`DeliveryPoint Create failed for FID ${note.fid}: ${upsertJson.message}`);
-    } else {
-      // Update failure is non-fatal — the DeliveryPoint already exists and the FID is valid
-      console.warn(`[Osapiens] DeliveryPoint Update warning for FID ${note.fid}:`, upsertJson.message);
-    }
+  const createJson = (await createResp.json()) as { error?: boolean; message?: string };
+  if (createJson.error) {
+    throw new Error(`DeliveryPoint Create failed for FID ${note.fid}: ${createJson.message}`);
   } else {
-    console.log(`[Osapiens] DeliveryPoint ${action} OK for FID: ${note.fid}`);
+    console.log(`[Osapiens] DeliveryPoint created OK for FID: ${note.fid} (key: ${dpKey})`);
   }
 }
 
