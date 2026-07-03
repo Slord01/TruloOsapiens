@@ -188,8 +188,11 @@ async function ensureDeliveryPoint(
     }
   }
 
-  // Step 2: Upsert the DeliveryPoint — use FID as the KEY
-  const dpKey = note.fid;
+  // Step 2: Upsert the DeliveryPoint.
+  // Use "dp-{fid}" as the KEY to avoid collisions with other facility types
+  // (e.g. Scanning Locations) that may already be registered under the raw FID.
+  // The FID value itself is stored in the Fid field and is what the SalesOrder references.
+  const dpKey = `dp-${note.fid}`;
   const dpReadResp = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: authHeader },
@@ -228,7 +231,13 @@ async function ensureDeliveryPoint(
   });
   const upsertJson = (await upsertResp.json()) as { error?: boolean; message?: string };
   if (upsertJson.error) {
-    console.warn(`[Osapiens] DeliveryPoint ${action} warning:`, upsertJson.message);
+    if (action === "Create") {
+      // Create failure is fatal — the SalesOrder will fail without a registered DeliveryPoint
+      throw new Error(`DeliveryPoint Create failed for FID ${note.fid}: ${upsertJson.message}`);
+    } else {
+      // Update failure is non-fatal — the DeliveryPoint already exists and the FID is valid
+      console.warn(`[Osapiens] DeliveryPoint Update warning for FID ${note.fid}:`, upsertJson.message);
+    }
   } else {
     console.log(`[Osapiens] DeliveryPoint ${action} OK for FID: ${note.fid}`);
   }
@@ -302,9 +311,10 @@ export async function sendDispatchToOsapiens(deliveryNoteId: number): Promise<Se
       addressPostalCode: note.addressPostalCode,
       addressCountry: note.addressCountry,
     });
-  } catch (dpErr) {
-    console.warn("[Osapiens] Could not upsert DeliveryPoint:", dpErr);
-    // Non-fatal — attempt the SalesOrder anyway
+  } catch (dpErr: unknown) {
+    const msg = dpErr instanceof Error ? dpErr.message : String(dpErr);
+    console.error("[Osapiens] DeliveryPoint upsert failed:", msg);
+    return { success: false, error: `Could not register customer delivery point in Osapiens: ${msg}` };
   }
 
   const payload = buildSalesOrderPayload(note, cfg.ourFid);
