@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -10,93 +10,73 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
   QrCode,
   ArrowLeft,
   RefreshCw,
-  CheckCircle2,
-  XCircle,
-  ChevronDown,
-  ChevronRight,
+  AlertTriangle,
+  Info,
+  Terminal,
+  Trash2,
 } from "lucide-react";
 
-type FilterValue = "all" | "success" | "failure";
+type LevelFilter = "all" | "log" | "warn" | "error" | "info";
 
-const STEP_COLORS: Record<string, string> = {
-  Organisation: "bg-blue-500/15 text-blue-400 border border-blue-500/30",
-  DeliveryPoint: "bg-purple-500/15 text-purple-400 border border-purple-500/30",
-  SalesOrder: "bg-amber-500/15 text-amber-400 border border-amber-500/30",
+const LEVEL_STYLES: Record<string, string> = {
+  error: "text-red-400",
+  warn:  "text-amber-400",
+  info:  "text-blue-400",
+  log:   "text-muted-foreground",
 };
 
-function StepBadge({ step }: { step: string }) {
-  const cls = STEP_COLORS[step] ?? "bg-muted text-muted-foreground border border-border";
+const LEVEL_BADGE: Record<string, string> = {
+  error: "bg-red-500/15 text-red-400 border border-red-500/30",
+  warn:  "bg-amber-500/15 text-amber-400 border border-amber-500/30",
+  info:  "bg-blue-500/15 text-blue-400 border border-blue-500/30",
+  log:   "bg-muted/40 text-muted-foreground border border-border",
+};
+
+function LevelBadge({ level }: { level: string }) {
+  const cls = LEVEL_BADGE[level] ?? LEVEL_BADGE.log;
   return (
-    <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ${cls}`}>
-      {step}
+    <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-mono font-semibold uppercase shrink-0 ${cls}`}>
+      {level}
     </span>
-  );
-}
-
-function SuccessBadge({ success }: { success: boolean }) {
-  return success ? (
-    <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-400">
-      <CheckCircle2 className="h-3.5 w-3.5" />
-      OK
-    </span>
-  ) : (
-    <span className="inline-flex items-center gap-1 text-xs font-medium text-red-400">
-      <XCircle className="h-3.5 w-3.5" />
-      Fail
-    </span>
-  );
-}
-
-function ExpandableCell({ content }: { content: string | null }) {
-  const [expanded, setExpanded] = useState(false);
-  if (!content) return <span className="text-muted-foreground text-xs">—</span>;
-
-  const preview = content.length > 80 ? content.slice(0, 80) + "…" : content;
-
-  return (
-    <div className="max-w-xs">
-      <button
-        onClick={() => setExpanded((v) => !v)}
-        className="flex items-start gap-1 text-left text-xs text-muted-foreground hover:text-foreground transition-colors"
-      >
-        {expanded ? (
-          <ChevronDown className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-        )}
-        <span className={expanded ? "whitespace-pre-wrap break-all font-mono" : ""}>
-          {expanded ? content : preview}
-        </span>
-      </button>
-    </div>
   );
 }
 
 export default function Logs() {
   const [, navigate] = useLocation();
-  const [filter, setFilter] = useState<FilterValue>("all");
+  const [level, setLevel] = useState<LevelFilter>("all");
+  const [autoScroll, setAutoScroll] = useState(true);
+  const [cleared, setCleared] = useState(0); // bump to visually "clear" the view
+  const [clearedBefore, setClearedBefore] = useState<number | undefined>(undefined);
+  const bottomRef = useRef<HTMLDivElement>(null);
 
-  const { data, isLoading, refetch, isFetching } = trpc.logs.list.useQuery(
-    { limit: 200, offset: 0, filter },
-    { refetchInterval: 30_000 }
+  // Poll every 2 seconds for new entries
+  const { data, isLoading, isFetching, refetch } = trpc.logs.getLive.useQuery(
+    { level, limit: 500 },
+    { refetchInterval: 2000 }
   );
 
-  const logs = data?.logs ?? [];
-  const total = data?.total ?? 0;
+  const entries = (data?.entries ?? []).filter(
+    (e) => clearedBefore == null || e.id > clearedBefore
+  );
+
+  // Auto-scroll to bottom when new entries arrive
+  useEffect(() => {
+    if (autoScroll && bottomRef.current) {
+      bottomRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [entries.length, autoScroll]);
+
+  function handleClear() {
+    const lastId = data?.lastId ?? 0;
+    setClearedBefore(lastId);
+    setCleared((n) => n + 1);
+  }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background flex flex-col">
       {/* Header */}
       <header className="border-b border-border bg-card/60 backdrop-blur-sm sticky top-0 z-10">
         <div className="container py-4 flex items-center justify-between gap-4">
@@ -111,114 +91,123 @@ export default function Logs() {
               <span className="hidden sm:inline text-xs">Orders</span>
             </Button>
             <div className="h-9 w-9 rounded-xl bg-primary/20 flex items-center justify-center">
-              <QrCode className="h-5 w-5 text-primary" />
+              <Terminal className="h-5 w-5 text-primary" />
             </div>
             <div>
-              <h1 className="text-base font-semibold text-foreground leading-tight">Osapiens Logs</h1>
-              <p className="text-xs text-muted-foreground">API call history</p>
+              <h1 className="text-base font-semibold text-foreground leading-tight">Server Logs</h1>
+              <p className="text-xs text-muted-foreground">Live backend console output</p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <Select value={filter} onValueChange={(v) => setFilter(v as FilterValue)}>
-              <SelectTrigger className="h-8 w-32 text-xs bg-card border-border text-foreground">
+            {/* Level filter */}
+            <Select value={level} onValueChange={(v) => setLevel(v as LevelFilter)}>
+              <SelectTrigger className="h-8 w-28 text-xs bg-card border-border text-foreground">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All calls</SelectItem>
-                <SelectItem value="success">Success only</SelectItem>
-                <SelectItem value="failure">Failures only</SelectItem>
+                <SelectItem value="all">All levels</SelectItem>
+                <SelectItem value="error">Errors</SelectItem>
+                <SelectItem value="warn">Warnings</SelectItem>
+                <SelectItem value="info">Info</SelectItem>
+                <SelectItem value="log">Log</SelectItem>
               </SelectContent>
             </Select>
 
+            {/* Auto-scroll toggle */}
+            <Button
+              size="sm"
+              variant={autoScroll ? "default" : "outline"}
+              onClick={() => setAutoScroll((v) => !v)}
+              className="h-8 px-2.5 text-xs gap-1.5"
+              title="Toggle auto-scroll to bottom"
+            >
+              <ArrowLeft className={`h-3.5 w-3.5 rotate-[-90deg] transition-transform ${autoScroll ? "" : "opacity-40"}`} />
+              <span className="hidden md:inline">Auto-scroll</span>
+            </Button>
+
+            {/* Clear view */}
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={handleClear}
+              className="h-8 px-2.5 text-xs gap-1.5 text-muted-foreground hover:text-foreground hover:bg-accent"
+              title="Clear the current view (does not delete logs)"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              <span className="hidden md:inline">Clear</span>
+            </Button>
+
+            {/* Manual refresh */}
             <Button
               size="sm"
               variant="ghost"
               onClick={() => refetch()}
               disabled={isFetching}
-              className="gap-1.5 text-muted-foreground hover:text-foreground hover:bg-accent"
+              className="h-8 px-2.5 text-xs gap-1.5 text-muted-foreground hover:text-foreground hover:bg-accent"
             >
               <RefreshCw className={`h-3.5 w-3.5 ${isFetching ? "animate-spin" : ""}`} />
-              <span className="hidden md:inline text-xs">Refresh</span>
+              <span className="hidden md:inline">Refresh</span>
             </Button>
           </div>
         </div>
       </header>
 
-      {/* Body */}
-      <main className="container py-6">
-        {/* Summary row */}
-        <div className="flex items-center gap-4 mb-4 text-sm text-muted-foreground">
-          <span>
-            {isLoading ? "Loading…" : `${total} log entr${total !== 1 ? "ies" : "y"} total`}
+      {/* Log terminal */}
+      <main className="container py-4 flex-1 flex flex-col">
+        {/* Stats bar */}
+        <div className="flex items-center gap-4 mb-3 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1">
+            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+            Live · polling every 2s
           </span>
-          {!isLoading && total > 200 && (
-            <span className="text-xs text-amber-400">Showing latest 200</span>
+          <span>{entries.length} entr{entries.length !== 1 ? "ies" : "y"} shown</span>
+          {entries.filter((e) => e.level === "error").length > 0 && (
+            <span className="flex items-center gap-1 text-red-400">
+              <AlertTriangle className="h-3 w-3" />
+              {entries.filter((e) => e.level === "error").length} error{entries.filter((e) => e.level === "error").length !== 1 ? "s" : ""}
+            </span>
           )}
         </div>
 
-        {isLoading ? (
-          <div className="flex items-center justify-center py-24 text-muted-foreground">
-            <RefreshCw className="h-5 w-5 animate-spin mr-2" />
-            Loading logs…
-          </div>
-        ) : logs.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-24 text-muted-foreground gap-3">
-            <QrCode className="h-10 w-10 opacity-30" />
-            <p className="text-sm">No log entries yet.</p>
-            <p className="text-xs">Logs appear here after you send an order to Osapiens.</p>
-          </div>
-        ) : (
-          <div className="rounded-xl border border-border overflow-hidden">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-card/60 hover:bg-card/60">
-                  <TableHead className="text-xs w-40">Timestamp</TableHead>
-                  <TableHead className="text-xs w-28">Order #</TableHead>
-                  <TableHead className="text-xs">Customer</TableHead>
-                  <TableHead className="text-xs w-32">Step</TableHead>
-                  <TableHead className="text-xs w-16">HTTP</TableHead>
-                  <TableHead className="text-xs w-16">Status</TableHead>
-                  <TableHead className="text-xs">Response</TableHead>
-                  <TableHead className="text-xs">Error</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {logs.map((log) => (
-                  <TableRow
-                    key={log.id}
-                    className={`text-xs ${!log.success ? "bg-red-500/5 hover:bg-red-500/10" : "hover:bg-accent/30"}`}
-                  >
-                    <TableCell className="text-muted-foreground whitespace-nowrap">
-                      {new Date(log.createdAt).toLocaleString()}
-                    </TableCell>
-                    <TableCell className="font-mono font-medium text-foreground">
-                      {log.xentralNumber}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground max-w-[160px] truncate">
-                      {log.customerName ?? "—"}
-                    </TableCell>
-                    <TableCell>
-                      <StepBadge step={log.step} />
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {log.httpStatus ?? "—"}
-                    </TableCell>
-                    <TableCell>
-                      <SuccessBadge success={log.success} />
-                    </TableCell>
-                    <TableCell>
-                      <ExpandableCell content={log.responseBody} />
-                    </TableCell>
-                    <TableCell>
-                      <ExpandableCell content={log.errorMessage} />
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
+        <div className="flex-1 rounded-xl border border-border bg-black/40 font-mono text-xs overflow-auto max-h-[calc(100vh-180px)]">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-16 text-muted-foreground gap-2">
+              <RefreshCw className="h-4 w-4 animate-spin" />
+              Connecting to log stream…
+            </div>
+          ) : entries.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-3">
+              <Info className="h-8 w-8 opacity-30" />
+              <p>No log entries yet.</p>
+              <p className="text-[11px]">Server output will appear here as actions are performed.</p>
+            </div>
+          ) : (
+            <div className="p-3 space-y-0.5">
+              {entries.map((entry) => (
+                <div
+                  key={entry.id}
+                  className={`flex items-start gap-2 py-0.5 hover:bg-white/5 rounded px-1 ${LEVEL_STYLES[entry.level] ?? LEVEL_STYLES.log}`}
+                >
+                  {/* Timestamp */}
+                  <span className="text-[10px] text-muted-foreground/60 shrink-0 pt-0.5 w-[155px]">
+                    {new Date(entry.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}
+                    <span className="text-[9px] ml-1 opacity-50">
+                      .{new Date(entry.ts).getMilliseconds().toString().padStart(3, "0")}
+                    </span>
+                  </span>
+                  {/* Level badge */}
+                  <LevelBadge level={entry.level} />
+                  {/* Message */}
+                  <span className="flex-1 break-all whitespace-pre-wrap leading-relaxed">
+                    {entry.message}
+                  </span>
+                </div>
+              ))}
+              <div ref={bottomRef} />
+            </div>
+          )}
+        </div>
       </main>
     </div>
   );

@@ -5,6 +5,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { listDeliveryNotes, getDeliveryNoteById, deleteDeliveryNote, bulkDeleteDeliveryNotesByStatus, markSentToOsapiens, markOsapiensSendError, getOsapiensLogs } from "./db";
+import { getLogEntries } from "./logBuffer";
 import { sendDispatchToOsapiens, isOsapiensConfigured } from "./osapiensSender";
 import { refreshProductCache, getCacheStats } from "./productCache";
 import { retryDeliveryNote } from "./webhookProcessor";
@@ -148,7 +149,7 @@ export const appRouter = router({
       }),
   }),
 
-  // ─── Osapiens Logs ───────────────────────────────────────────────────────────
+  // ─── Logs ───────────────────────────────────────────────────────────────────
   logs: router({
     list: publicProcedure
       .input(
@@ -166,6 +167,23 @@ export const appRouter = router({
           failureOnly: input.filter === "failure",
         });
         return result;
+      }),
+
+    /** Live server console output — in-memory circular buffer (last 500 lines) */
+    getLive: publicProcedure
+      .input(
+        z.object({
+          since: z.number().optional(),   // return only entries newer than this id
+          level: z.enum(["all", "log", "warn", "error", "info"]).default("all"),
+          limit: z.number().min(1).max(500).default(200),
+        })
+      )
+      .query(({ input }) => {
+        return getLogEntries({
+          since: input.since,
+          level: input.level === "all" ? undefined : input.level,
+          limit: input.limit,
+        });
       }),
   }),
 

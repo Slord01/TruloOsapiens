@@ -1,4 +1,6 @@
 import "dotenv/config";
+import { initLogCapture } from "../logBuffer";
+initLogCapture(); // Must be first — captures all subsequent console output
 import express from "express";
 import { createServer } from "http";
 import net from "net";
