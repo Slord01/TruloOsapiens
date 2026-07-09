@@ -10,13 +10,8 @@ import { refreshProductCache, getCacheStats } from "./productCache";
 import { retryDeliveryNote } from "./webhookProcessor";
 import { fetchAndProcessDeliveryNotes, fetchDeliveryNoteByDocumentNumber } from "./xentralPoller";
 
-// ─── Admin guard ──────────────────────────────────────────────────────────────
-const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
-  if (ctx.user.role !== "admin") {
-    throw new TRPCError({ code: "FORBIDDEN", message: "Admin access required" });
-  }
-  return next({ ctx });
-});
+// ─── Admin guard (disabled — app is public, no auth required) ────────────────
+const adminProcedure = publicProcedure;
 
 // ─── App Router ───────────────────────────────────────────────────────────────
 export const appRouter = router({
@@ -32,7 +27,7 @@ export const appRouter = router({
 
   // ─── Orders ────────────────────────────────────────────────────────────────
   orders: router({
-    list: protectedProcedure
+    list: publicProcedure
       .input(
         z.object({
           page: z.number().min(1).default(1),
@@ -66,49 +61,18 @@ export const appRouter = router({
         };
       }),
 
-    getById: protectedProcedure
+    getById: publicProcedure
       .input(z.object({ id: z.number() }))
-      .query(async ({ input, ctx }) => {
+      .query(async ({ input }) => {
         const note = await getDeliveryNoteById(input.id);
         if (!note) throw new TRPCError({ code: "NOT_FOUND", message: "Order not found" });
-        // Warehouse users only see QR + basic info; admins see full detail
-        if (ctx.user.role === "user") {
-          return {
-            id: note.id,
-            xentralNumber: note.xentralNumber,
-            salesOrderNumber: note.salesOrderNumber,
-            customerName: note.customerName,
-            status: note.status,
-            errorMessage: note.errorMessage,
-            qrCodeDataUrl: note.qrCodeDataUrl,
-            dispatchQrText: note.dispatchQrText,
-            eoid: note.eoid,
-            fid: note.fid,
-            paymentMethod: note.paymentMethod,
-            deliveryMethod: note.deliveryMethod,
-            orderValue: note.orderValue,
-            orderCurrency: note.orderCurrency,
-            salesOrderId: note.salesOrderId,
-            addressStreet: note.addressStreet,
-            addressCity: note.addressCity,
-            addressPostalCode: note.addressPostalCode,
-            addressCountry: note.addressCountry,
-            deliveryDate: note.deliveryDate,
-            items: note.items,
-            sentToOsapiens: note.sentToOsapiens,
-            sentToOsapiensAt: note.sentToOsapiensAt,
-            osapiensSendError: note.osapiensSendError,
-            osapiensSalesOrder: null, // hidden from warehouse
-            rawPayload: null,
-          };
-        }
         return {
           ...note,
           rawPayload: note.rawPayload,
         };
       }),
 
-    retry: protectedProcedure
+    retry: publicProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input }) => {
         const result = await retryDeliveryNote(input.id);
@@ -146,7 +110,7 @@ export const appRouter = router({
      * Send a dispatch event for a delivery note to the Osapiens API.
      * Available to all authenticated users (not admin-only).
      */
-    sendToOsapiens: protectedProcedure
+    sendToOsapiens: publicProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input }) => {
         const result = await sendDispatchToOsapiens(input.id);
@@ -163,7 +127,7 @@ export const appRouter = router({
       }),
 
     /** Check if Osapiens credentials are configured */
-    osapiensStatus: protectedProcedure.query(() => {
+    osapiensStatus: publicProcedure.query(() => {
       return { configured: isOsapiensConfigured() };
     }),
 
@@ -196,7 +160,7 @@ export const appRouter = router({
       }
       return { count: result.count, syncedAt: new Date() };
     }),
-    cacheStats: protectedProcedure.query(() => {
+    cacheStats: publicProcedure.query(() => {
       return getCacheStats();
     }),
   }),
