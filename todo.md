@@ -148,3 +148,23 @@
 - [x] Remove non-spec fields (DeliveryMethod, PaymentMethod, OrderValue) from SalesOrder payload
 - [x] End-to-end test: Sales Order created successfully in Osapiens live system (HTTP 200)
 - [x] All 33 Vitest tests passing
+
+## Phase 16 — Remove Authentication (Public Access)
+
+- [x] Change all protectedProcedure/adminProcedure to publicProcedure in routers.ts
+- [x] Remove login redirect from client/src/main.tsx
+- [x] All 33 Vitest tests passing
+
+## Phase 17 — Osapiens API Call Logging
+
+- [x] Add osapiens_logs table to drizzle/schema.ts
+- [x] Apply migration SQL via webdev_execute_sql
+- [x] Fix broken import in osapiensSender.ts (use getDb() from ./db instead of non-existent ./_core/db)
+- [x] Rewrite logStep() helper in osapiensSender.ts to use getDb() pattern
+- [x] Log Organisation, DeliveryPoint, and SalesOrder API call results to osapiens_logs DB table
+- [x] Add getOsapiensLogs() DB helper in server/db.ts
+- [x] Add tRPC procedure: logs.list (paginated, filterable by success/failure)
+- [x] Build Logs frontend page (client/src/pages/Logs.tsx) with table, step badges, expandable response bodies
+- [x] Register /logs route in App.tsx
+- [x] Add "Logs" nav button in Orders.tsx header
+- [x] All 33 Vitest tests passing

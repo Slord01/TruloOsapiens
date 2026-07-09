@@ -29,6 +29,7 @@ import {
   Trash2,
   Send,
   CheckCircle2,
+  ScrollText,
 } from "lucide-react";
 
 const PAGE_SIZE = 20;
@@ -178,6 +179,18 @@ export default function Orders() {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Logs nav link */}
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => navigate("/logs")}
+              className="gap-1.5 text-muted-foreground hover:text-foreground hover:bg-accent"
+              title="View Osapiens API call logs"
+            >
+              <ScrollText className="h-3.5 w-3.5" />
+              <span className="hidden md:inline text-xs">Logs</span>
+            </Button>
+
             {/* Product cache indicator */}
             {cacheStats.data && (
               <span className="hidden sm:inline-flex items-center gap-1.5 text-xs text-muted-foreground bg-card border border-border rounded-lg px-2.5 py-1.5">

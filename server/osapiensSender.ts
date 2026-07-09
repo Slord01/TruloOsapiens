@@ -10,7 +10,8 @@
  * Spec:     TNT_OS_INTERFACES_TECHNICAL-SPEC_v.2.5.pdf Section 5.8
  */
 
-import { getDeliveryNoteById } from "./db";
+import { getDb, getDeliveryNoteById } from "./db";
+import { osapiensLogs } from "../drizzle/schema";
 
 // ─── Environment helpers ──────────────────────────────────────────────────────
 
@@ -27,6 +28,37 @@ function getOsapiensConfig() {
 export function isOsapiensConfigured(): boolean {
   const cfg = getOsapiensConfig();
   return !!(cfg.apiUrl && cfg.username && cfg.password && cfg.customer && cfg.ourFid);
+}
+
+// ─── DB logger ───────────────────────────────────────────────────────────────
+
+async function logStep(entry: {
+  deliveryNoteId: number;
+  xentralNumber: string;
+  customerName: string | null;
+  step: string;
+  httpStatus?: number;
+  success: boolean;
+  responseBody?: string;
+  errorMessage?: string;
+}) {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    await db.insert(osapiensLogs).values({
+      deliveryNoteId: entry.deliveryNoteId,
+      xentralNumber: entry.xentralNumber,
+      customerName: entry.customerName ?? null,
+      step: entry.step,
+      httpStatus: entry.httpStatus ?? null,
+      success: entry.success,
+      responseBody: entry.responseBody ?? null,
+      errorMessage: entry.errorMessage ?? null,
+    });
+  } catch (e) {
+    // Non-fatal — don't let logging failures break the send
+    console.error("[Osapiens] Failed to write log entry:", e);
+  }
 }
 
 // ─── Payload builder ──────────────────────────────────────────────────────────
@@ -56,13 +88,11 @@ function buildSalesOrderPayload(note: {
 }, ourFid: string): object {
   const now = new Date().toISOString();
 
-  // Map line items to Osapiens OrderItems
   const orderItems = note.items.map((item) => ({
     Name: item.productName ?? "",
     Sku: item.productNumber ?? "",
     UnitGtin: item.ean ?? "",
     OrderedQty: item.quantity ? parseFloat(item.quantity) : 0,
-    // CaseGtin / BundleGtin not available from Xentral — leave empty
     CaseGtin: "",
     CaseQty: 0,
     BundleGtin: "",
@@ -73,7 +103,6 @@ function buildSalesOrderPayload(note: {
   return {
     object: "SalesOrder",
     action: "Create",
-    // KEY is the primary key in Osapiens — use the Xentral delivery note number
     key: note.xentralNumber,
     data: {
       OrderNumber: note.xentralNumber,
@@ -81,8 +110,6 @@ function buildSalesOrderPayload(note: {
       DeliveryDate: note.deliveryDate ?? "",
       State: "CREATED",
       SendingSystem: "TNT-Bridge",
-
-      // Sold-to party = the customer
       SoldToParty: {
         Name: note.customerName ?? "",
         EoId: note.eoid ?? "",
@@ -92,8 +119,6 @@ function buildSalesOrderPayload(note: {
         Country: note.addressCountry ?? "",
         ExternalReference: "",
       },
-
-      // Delivery point = customer FID (destination facility)
       DeliveryPoint: {
         FacilityId: note.fid ?? "",
         Name: note.customerName ?? "",
@@ -103,8 +128,6 @@ function buildSalesOrderPayload(note: {
         Country: note.addressCountry ?? "",
         ExternalReference: "",
       },
-
-      // Scanning point = our warehouse (where staff will scan)
       ScanningPoint: {
         FacilityId: ourFid,
         Address: "",
@@ -114,11 +137,7 @@ function buildSalesOrderPayload(note: {
         ExternalReference: "",
         Name: "Trulo GmbH Warehouse",
       },
-
-      // Order line items
       OrderItems: orderItems,
-
-      // Scanning progress — empty at creation, filled by mobile app
       OverallScannedCodes: [],
       CurrentlyScannedCodes: [],
       PickedItems: {},
@@ -129,11 +148,6 @@ function buildSalesOrderPayload(note: {
 
 // ─── Delivery Point upsert ───────────────────────────────────────────────────
 
-/**
- * Ensure the customer's Delivery Point exists in Osapiens.
- * Uses the customer FID as the KEY. Creates if missing, updates if present.
- * This is required before a SalesOrder can reference the DeliveryPoint.
- */
 async function ensureDeliveryPoint(
   endpoint: string,
   authHeader: string,
@@ -145,19 +159,19 @@ async function ensureDeliveryPoint(
     addressCity: string | null;
     addressPostalCode: string | null;
     addressCountry: string | null;
-  }
+  },
+  logCtx: { deliveryNoteId: number; xentralNumber: string; customerName: string | null }
 ): Promise<void> {
-  // Step 1: Ensure the customer Organisation exists (required before DeliveryPoint)
+  // Step 1: Ensure the customer Organisation exists
   const orgKey = note.eoid ?? note.fid;
   const orgReadResp = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: authHeader },
     body: JSON.stringify({ object: "Organization", action: "Read", key: orgKey }),
   });
-  const orgReadJson = (await orgReadResp.json()) as { error?: boolean };
+  const orgReadJson = (await orgReadResp.json()) as { error?: boolean; data?: unknown };
 
-  if (orgReadJson.error !== false) {
-    // Organisation doesn't exist — create it
+  if (orgReadJson.error !== false || orgReadJson.data == null) {
     const orgCreateResp = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: authHeader },
@@ -181,6 +195,15 @@ async function ensureDeliveryPoint(
       }),
     });
     const orgCreateJson = (await orgCreateResp.json()) as { error?: boolean; message?: string };
+    const orgBody = JSON.stringify(orgCreateJson);
+    await logStep({
+      ...logCtx,
+      step: "Organisation",
+      httpStatus: orgCreateResp.status,
+      success: !orgCreateJson.error,
+      responseBody: orgBody,
+      errorMessage: orgCreateJson.error ? orgCreateJson.message : undefined,
+    });
     if (orgCreateJson.error) {
       console.warn(`[Osapiens] Organization Create warning for ${orgKey}:`, orgCreateJson.message);
     } else {
@@ -188,13 +211,8 @@ async function ensureDeliveryPoint(
     }
   }
 
-  // Step 2: Create the DeliveryPoint with a unique key (fid + timestamp).
-  // We always Create (never Update) to avoid ghost-record collisions — Osapiens sometimes
-  // returns error:false with data:null for keys that are in a corrupted state, causing
-  // Update to fail with "is not a delivery point". A unique key guarantees a clean Create.
-  // The FID value in the data is what the SalesOrder references, not the KEY.
+  // Step 2: Always Create DeliveryPoint with unique timestamped key to avoid ghost-record collisions
   const dpKey = `dp-${note.fid}-${Date.now()}`;
-
   const createResp = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: authHeader },
@@ -210,7 +228,6 @@ async function ensureDeliveryPoint(
         Gln: "",
         VAT: "",
         Name: note.customerName ?? note.fid,
-        // OrganizationRef links this delivery point to the customer's organisation (required by Osapiens)
         OrganizationRef: orgKey,
         Address: {
           Country: note.addressCountry ?? "",
@@ -223,6 +240,15 @@ async function ensureDeliveryPoint(
     }),
   });
   const createJson = (await createResp.json()) as { error?: boolean; message?: string };
+  const dpBody = JSON.stringify(createJson);
+  await logStep({
+    ...logCtx,
+    step: "DeliveryPoint",
+    httpStatus: createResp.status,
+    success: !createJson.error,
+    responseBody: dpBody,
+    errorMessage: createJson.error ? createJson.message : undefined,
+  });
   if (createJson.error) {
     throw new Error(`DeliveryPoint Create failed for FID ${note.fid}: ${createJson.message}`);
   } else {
@@ -239,11 +265,6 @@ export interface SendResult {
   error?: string;
 }
 
-/**
- * Send a Sales Order to the Osapiens masterdata API for a given delivery note.
- * Warehouse staff then open the order in the Osapiens mobile app and scan T&T codes.
- * Returns a result object — never throws.
- */
 export async function sendDispatchToOsapiens(deliveryNoteId: number): Promise<SendResult> {
   const cfg = getOsapiensConfig();
 
@@ -258,12 +279,10 @@ export async function sendDispatchToOsapiens(deliveryNoteId: number): Promise<Se
   if (!cfg.ourFid) {
     return {
       success: false,
-      error:
-        "Our warehouse FID is not configured. Please add OSAPIENS_OUR_FID in the app secrets.",
+      error: "Our warehouse FID is not configured. Please add OSAPIENS_OUR_FID in the app secrets.",
     };
   }
 
-  // Fetch the delivery note (with line items) from DB
   const note = await getDeliveryNoteById(deliveryNoteId);
   if (!note) {
     return { success: false, error: `Delivery note ${deliveryNoteId} not found` };
@@ -283,10 +302,15 @@ export async function sendDispatchToOsapiens(deliveryNoteId: number): Promise<Se
     };
   }
 
-  // Ensure the customer's Delivery Point exists in Osapiens before creating the Sales Order
   const endpoint = `${cfg.apiUrl.replace(/\/$/, "")}/data/in/rest/${cfg.customer}/tpd/masterdata-v1`;
   const authString = `un.${cfg.username}:${cfg.password}`;
   const authHeader = `Basic ${Buffer.from(authString).toString("base64")}`;
+
+  const logCtx = {
+    deliveryNoteId,
+    xentralNumber: note.xentralNumber,
+    customerName: note.customerName,
+  };
 
   try {
     await ensureDeliveryPoint(endpoint, authHeader, {
@@ -297,7 +321,7 @@ export async function sendDispatchToOsapiens(deliveryNoteId: number): Promise<Se
       addressCity: note.addressCity,
       addressPostalCode: note.addressPostalCode,
       addressCountry: note.addressCountry,
-    });
+    }, logCtx);
   } catch (dpErr: unknown) {
     const msg = dpErr instanceof Error ? dpErr.message : String(dpErr);
     console.error("[Osapiens] DeliveryPoint upsert failed:", msg);
@@ -306,30 +330,28 @@ export async function sendDispatchToOsapiens(deliveryNoteId: number): Promise<Se
 
   const payload = buildSalesOrderPayload(note, cfg.ourFid);
 
-  // Endpoint and auth already built above
-
-  console.log(
-    `[Osapiens] Creating Sales Order for delivery note ${note.xentralNumber} (DB id: ${deliveryNoteId})`
-  );
+  console.log(`[Osapiens] Creating Sales Order for delivery note ${note.xentralNumber} (DB id: ${deliveryNoteId})`);
   console.log(`[Osapiens] Endpoint: ${endpoint}`);
-  console.log(
-    `[Osapiens] Customer: ${note.customerName}, FID: ${note.fid}, EOID: ${note.eoid}`
-  );
+  console.log(`[Osapiens] Customer: ${note.customerName}, FID: ${note.fid}, EOID: ${note.eoid}`);
 
   try {
     const response = await fetch(endpoint, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: authHeader,
-      },
+      headers: { "Content-Type": "application/json", Authorization: authHeader },
       body: JSON.stringify(payload),
     });
 
     const responseBody = await response.text();
-    console.log(
-      `[Osapiens] Response: ${response.status} — ${responseBody.substring(0, 200)}`
-    );
+    console.log(`[Osapiens] Response: ${response.status} — ${responseBody.substring(0, 200)}`);
+
+    await logStep({
+      ...logCtx,
+      step: "SalesOrder",
+      httpStatus: response.status,
+      success: response.ok,
+      responseBody,
+      errorMessage: response.ok ? undefined : responseBody.substring(0, 1000),
+    });
 
     if (response.ok) {
       return { success: true, statusCode: response.status, responseBody };
@@ -344,6 +366,12 @@ export async function sendDispatchToOsapiens(deliveryNoteId: number): Promise<Se
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[Osapiens] Network error:`, message);
+    await logStep({
+      ...logCtx,
+      step: "SalesOrder",
+      success: false,
+      errorMessage: `Network error: ${message}`,
+    });
     return { success: false, error: `Network error: ${message}` };
   }
 }

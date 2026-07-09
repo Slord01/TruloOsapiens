@@ -275,3 +275,41 @@ export async function updateDeliveryNoteStatus(
   if (update.addressCountry !== undefined) setValues.addressCountry = update.addressCountry;
   await db.update(deliveryNotes).set(setValues as any).where(eq(deliveryNotes.id, id));
 }
+
+// ─── Osapiens Logs ────────────────────────────────────────────────────────────
+
+import { osapiensLogs } from "../drizzle/schema";
+
+export async function getOsapiensLogs(opts: {
+  limit?: number;
+  offset?: number;
+  successOnly?: boolean;
+  failureOnly?: boolean;
+}) {
+  const db = await getDb();
+  if (!db) return { logs: [], total: 0 };
+
+  const conditions = [];
+  if (opts.successOnly) conditions.push(eq(osapiensLogs.success, true));
+  if (opts.failureOnly) conditions.push(eq(osapiensLogs.success, false));
+
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+  const limit = opts.limit ?? 200;
+  const offset = opts.offset ?? 0;
+
+  const [logs, countResult] = await Promise.all([
+    db
+      .select()
+      .from(osapiensLogs)
+      .where(where)
+      .orderBy(desc(osapiensLogs.createdAt))
+      .limit(limit)
+      .offset(offset),
+    db
+      .select({ count: sql<number>`COUNT(*)` })
+      .from(osapiensLogs)
+      .where(where),
+  ]);
+
+  return { logs, total: Number(countResult[0]?.count ?? 0) };
+}

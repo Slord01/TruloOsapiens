@@ -115,3 +115,29 @@ export const deliveryNoteItems = mysqlTable("delivery_note_items", {
 
 export type DeliveryNoteItem = typeof deliveryNoteItems.$inferSelect;
 export type InsertDeliveryNoteItem = typeof deliveryNoteItems.$inferInsert;
+
+// ─── Osapiens Send Logs ───────────────────────────────────────────────────────
+
+export const osapiensLogs = mysqlTable("osapiens_logs", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Delivery note DB id */
+  deliveryNoteId: int("deliveryNoteId").notNull(),
+  /** Delivery note number (e.g. 455278) */
+  xentralNumber: varchar("xentralNumber", { length: 128 }).notNull(),
+  /** Customer name */
+  customerName: varchar("customerName", { length: 512 }),
+  /** Which step: Organisation, DeliveryPoint, SalesOrder */
+  step: varchar("step", { length: 64 }).notNull(),
+  /** HTTP status code returned by Osapiens */
+  httpStatus: int("httpStatus"),
+  /** Whether the call succeeded */
+  success: boolean("success").notNull(),
+  /** Full response body from Osapiens (JSON string) */
+  responseBody: text("responseBody"),
+  /** Error message if failed */
+  errorMessage: text("errorMessage"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type OsapiensLog = typeof osapiensLogs.$inferSelect;
+export type InsertOsapiensLog = typeof osapiensLogs.$inferInsert;

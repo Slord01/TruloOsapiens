@@ -4,7 +4,7 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
-import { listDeliveryNotes, getDeliveryNoteById, deleteDeliveryNote, bulkDeleteDeliveryNotesByStatus, markSentToOsapiens, markOsapiensSendError } from "./db";
+import { listDeliveryNotes, getDeliveryNoteById, deleteDeliveryNote, bulkDeleteDeliveryNotesByStatus, markSentToOsapiens, markOsapiensSendError, getOsapiensLogs } from "./db";
 import { sendDispatchToOsapiens, isOsapiensConfigured } from "./osapiensSender";
 import { refreshProductCache, getCacheStats } from "./productCache";
 import { retryDeliveryNote } from "./webhookProcessor";
@@ -145,6 +145,27 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         const count = await bulkDeleteDeliveryNotesByStatus(input.status);
         return { deleted: count };
+      }),
+  }),
+
+  // ─── Osapiens Logs ───────────────────────────────────────────────────────────
+  logs: router({
+    list: publicProcedure
+      .input(
+        z.object({
+          limit: z.number().min(1).max(500).default(200),
+          offset: z.number().min(0).default(0),
+          filter: z.enum(["all", "success", "failure"]).default("all"),
+        })
+      )
+      .query(async ({ input }) => {
+        const result = await getOsapiensLogs({
+          limit: input.limit,
+          offset: input.offset,
+          successOnly: input.filter === "success",
+          failureOnly: input.filter === "failure",
+        });
+        return result;
       }),
   }),
 

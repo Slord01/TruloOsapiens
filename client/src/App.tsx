@@ -6,6 +6,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Orders from "./pages/Orders";
 import OrderDetail from "./pages/OrderDetail";
+import Logs from "./pages/Logs";
 
 function Router() {
   return (
@@ -14,6 +15,7 @@ function Router() {
       <Route path="/orders/:id">
         {(params) => <OrderDetail id={params.id} />}
       </Route>
+      <Route path="/logs" component={Logs} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>
