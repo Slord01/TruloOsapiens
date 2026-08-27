@@ -63,9 +63,17 @@ export async function getUserByOpenId(openId: string) {
 export async function upsertDeliveryNote(note: InsertDeliveryNote) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  // A delivery note already confirmed by Osapiens must remain Sent when Xentral
+  // is refreshed. Its source data is still updated below.
+  const existing = await db
+    .select({ status: deliveryNotes.status })
+    .from(deliveryNotes)
+    .where(eq(deliveryNotes.xentralId, note.xentralId))
+    .limit(1);
+  const effectiveStatus = existing[0]?.status === "sent" ? "sent" : note.status;
   await db
     .insert(deliveryNotes)
-    .values(note)
+    .values({ ...note, status: effectiveStatus })
     .onDuplicateKeyUpdate({
       set: {
         xentralNumber: note.xentralNumber,
@@ -86,7 +94,7 @@ export async function upsertDeliveryNote(note: InsertDeliveryNote) {
         osapiensSalesOrder: note.osapiensSalesOrder,
         qrCodeDataUrl: note.qrCodeDataUrl,
         dispatchQrText: note.dispatchQrText,
-        status: note.status,
+        status: effectiveStatus,
         errorMessage: note.errorMessage,
         deliveryDate: note.deliveryDate,
       },
@@ -137,7 +145,7 @@ export async function getDeliveryNoteByXentralId(xentralId: string) {
 export async function listDeliveryNotes(opts: {
   page: number;
   pageSize: number;
-  status?: "pending" | "ready" | "error";
+  status?: "pending" | "ready" | "sent" | "error";
   search?: string;
 }) {
   const db = await getDb();
@@ -202,6 +210,7 @@ export async function markSentToOsapiens(id: number): Promise<void> {
   const db = await getDb();
   if (!db) return;
   await db.update(deliveryNotes).set({
+    status: "sent",
     sentToOsapiens: true,
     sentToOsapiensAt: Date.now(),
     osapiensSendError: null,
@@ -212,7 +221,6 @@ export async function markOsapiensSendError(id: number, error: string): Promise<
   const db = await getDb();
   if (!db) return;
   await db.update(deliveryNotes).set({
-    sentToOsapiens: false,
     osapiensSendError: error,
   } as any).where(eq(deliveryNotes.id, id));
 }
@@ -220,7 +228,7 @@ export async function markOsapiensSendError(id: number, error: string): Promise<
 export async function updateDeliveryNoteStatus(
   id: number,
   update: {
-    status: "pending" | "ready" | "error";
+    status: "pending" | "ready" | "sent" | "error";
     osapiensSalesOrder?: unknown;
     qrCodeDataUrl?: string | null;
     /** Plain text OSAPV1EDP dispatch QR string */

@@ -1,6 +1,7 @@
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { StatusBadge } from "@/components/StatusBadge";
+import { getDisplayOrderStatus } from "@shared/orderStatus";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import {
@@ -65,8 +66,8 @@ export default function OrderDetail({ id }: OrderDetailProps) {
   const utils = trpc.useUtils();
 
   const sendToOsapiensMutation = trpc.orders.sendToOsapiens.useMutation({
-    onSuccess: () => {
-      toast.success("Dispatch event sent to Osapiens successfully");
+    onSuccess: (data) => {
+      toast.success(data.qrRefreshed ? `${data.message} QR code refreshed.` : data.message);
       refetch();
     },
     onError: (err) => {
@@ -128,7 +129,7 @@ export default function OrderDetail({ id }: OrderDetailProps) {
     );
   }
 
-  const status = note.status as "ready" | "error" | "pending";
+  const status = getDisplayOrderStatus(note.status, note.sentToOsapiens);
 
   return (
     <div className="min-h-screen bg-background">
@@ -187,6 +188,19 @@ export default function OrderDetail({ id }: OrderDetailProps) {
                 {note.sentToOsapiens ? "Resend to Osapiens" : "Send to Osapiens"}
               </Button>
             )}
+            {status === "sent" && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => sendToOsapiensMutation.mutate({ id: numId })}
+                disabled={sendToOsapiensMutation.isPending}
+                className="gap-2 border-[oklch(0.65_0.18_145)] text-[oklch(0.72_0.18_145)] hover:bg-[oklch(0.20_0.06_145)]"
+                title="Recheck the SalesOrder and synchronise its customer master data"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${sendToOsapiensMutation.isPending ? "animate-spin" : ""}`} />
+                Sync Osapiens data
+              </Button>
+            )}
           </div>
         </div>
       </header>
@@ -195,7 +209,7 @@ export default function OrderDetail({ id }: OrderDetailProps) {
         <div className="grid lg:grid-cols-2 gap-6">
           {/* ── Left: QR Code ── */}
           <div className="space-y-4">
-            {status === "ready" && note.qrCodeDataUrl ? (
+            {(status === "ready" || status === "sent") && note.qrCodeDataUrl ? (
               <div className="rounded-xl border border-border bg-card overflow-hidden">
                 <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-card/80">
                   <div className="flex items-center gap-2.5">
@@ -373,14 +387,14 @@ export default function OrderDetail({ id }: OrderDetailProps) {
         </div>
 
         {/* ── Osapiens Send Status ── */}
-        {status === "ready" && (
+        {(status === "ready" || status === "sent") && (
           <div className="mt-4">
             {(note as {sentToOsapiens?: boolean | null}).sentToOsapiens ? (
               <div className="rounded-xl border border-[oklch(0.65_0.18_145_/_0.4)] bg-[oklch(0.20_0.06_145_/_0.3)] px-4 py-3 flex items-center gap-3">
                 <CheckCircle2 className="h-4 w-4 text-[oklch(0.65_0.18_145)] flex-shrink-0" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-[oklch(0.65_0.18_145)]">
-                    Dispatch event sent to Osapiens
+                    SalesOrder sent to Osapiens
                   </p>
                   {(note as {sentToOsapiensAt?: number | null}).sentToOsapiensAt && (
                     <p className="text-xs text-muted-foreground mt-0.5">
@@ -400,7 +414,7 @@ export default function OrderDetail({ id }: OrderDetailProps) {
                   ) : (
                     <Send className="h-3 w-3 mr-1" />
                   )}
-                  Resend
+                  Sync data
                 </Button>
               </div>
             ) : (note as {osapiensSendError?: string | null}).osapiensSendError ? (

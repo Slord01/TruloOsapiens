@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 
-type Status = "ready" | "error" | "pending";
+type Status = "ready" | "sent" | "error" | "pending";
 
 interface StatusBadgeProps {
   status: Status;
@@ -12,6 +12,11 @@ const config: Record<Status, { label: string; className: string }> = {
     label: "Ready",
     className:
       "bg-[oklch(0.20_0.06_145)] text-[oklch(0.65_0.18_145)] border border-[oklch(0.65_0.18_145_/_0.3)]",
+  },
+  sent: {
+    label: "Sent",
+    className:
+      "bg-[oklch(0.20_0.06_145)] text-[oklch(0.72_0.18_145)] border border-[oklch(0.72_0.18_145_/_0.45)]",
   },
   error: {
     label: "Error",
@@ -38,6 +43,7 @@ export function StatusBadge({ status, className }: StatusBadgeProps) {
       <span
         className={cn("h-1.5 w-1.5 rounded-full", {
           "bg-[oklch(0.65_0.18_145)]": status === "ready",
+          "bg-[oklch(0.72_0.18_145)]": status === "sent",
           "bg-[oklch(0.62_0.22_25)]": status === "error",
           "bg-[oklch(0.72_0.14_75)]": status === "pending",
         })}

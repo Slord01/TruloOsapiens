@@ -1,36 +1,50 @@
 /**
- * osapiensSender.ts
+ * Sends a mapped Xentral delivery note to the Osapiens TPD masterdata API.
  *
- * Creates a Sales Order in the Osapiens masterdata API so that warehouse staff
- * can open the order in the Osapiens mobile app, scan T&T codes against it, and
- * have Osapiens automatically match the codes to the order and customer.
- *
- * Endpoint: POST [OSAPIENS_API_URL]/data/in/rest/[CUSTOMER]/tpd/masterdata-v1
- * Auth:     HTTP Basic Auth with "un." prefix on username
- * Spec:     TNT_OS_INTERFACES_TECHNICAL-SPEC_v.2.5.pdf Section 5.8
+ * The customer is created as a `Customer` record, which is displayed as a
+ * Sold-to Party in the Osapiens portal.  Customer organisations are never
+ * created by this integration: the Customer is linked to the existing TRULO
+ * organisation, and the DeliveryPoint remains the customer destination.
  */
-
 import { getDb, getDeliveryNoteById } from "./db";
 import { osapiensLogs } from "../drizzle/schema";
 
-// ─── Environment helpers ──────────────────────────────────────────────────────
+type LogContext = {
+  deliveryNoteId: number;
+  xentralNumber: string;
+  customerName: string | null;
+};
+
+type ApiBody = {
+  error?: boolean;
+  errorCode?: string;
+  message?: string;
+  data?: unknown;
+};
+
+type ApiCallResult = {
+  httpStatus: number;
+  body: string;
+  json: ApiBody;
+  success: boolean;
+  alreadyExists: boolean;
+};
 
 function getOsapiensConfig() {
-  const apiUrl = process.env.OSAPIENS_API_URL ?? "";
-  const username = process.env.OSAPIENS_USERNAME ?? "";
-  const password = process.env.OSAPIENS_PASSWORD ?? "";
-  const customer = process.env.OSAPIENS_CUSTOMER ?? "";
-  const ourFid = process.env.OSAPIENS_OUR_FID ?? "";
-
-  return { apiUrl, username, password, customer, ourFid };
+  return {
+    apiUrl: process.env.OSAPIENS_API_URL ?? "",
+    username: process.env.OSAPIENS_USERNAME ?? "",
+    password: process.env.OSAPIENS_PASSWORD ?? "",
+    customer: process.env.OSAPIENS_CUSTOMER ?? "",
+    ourFid: process.env.OSAPIENS_OUR_FID ?? "",
+    ourEoid: process.env.OSAPIENS_OUR_EOID ?? "",
+  };
 }
 
 export function isOsapiensConfigured(): boolean {
   const cfg = getOsapiensConfig();
-  return !!(cfg.apiUrl && cfg.username && cfg.password && cfg.customer && cfg.ourFid);
+  return !!(cfg.apiUrl && cfg.username && cfg.password && cfg.customer && cfg.ourFid && cfg.ourEoid);
 }
-
-// ─── DB logger ───────────────────────────────────────────────────────────────
 
 async function logStep(entry: {
   deliveryNoteId: number;
@@ -55,61 +69,229 @@ async function logStep(entry: {
       responseBody: entry.responseBody ?? null,
       errorMessage: entry.errorMessage ?? null,
     });
-  } catch (e) {
-    // Non-fatal — don't let logging failures break the send
-    console.error("[Osapiens] Failed to write log entry:", e);
+  } catch (error) {
+    // Audit logging must never block an operational submission.
+    console.error("[Osapiens] Failed to write log entry:", error);
   }
 }
 
-// ─── Payload builder ──────────────────────────────────────────────────────────
+function parseApiBody(body: string): ApiBody {
+  try {
+    const parsed = JSON.parse(body);
+    return parsed && typeof parsed === "object" ? parsed as ApiBody : {};
+  } catch {
+    return {};
+  }
+}
 
-function buildSalesOrderPayload(note: {
-  xentralNumber: string;
-  customerName: string | null;
-  eoid: string | null;
-  fid: string | null;
-  addressStreet: string | null;
-  addressCity: string | null;
-  addressPostalCode: string | null;
-  addressCountry: string | null;
-  deliveryDate: string | null;
-  deliveryMethod: string | null;
-  paymentMethod: string | null;
-  orderValue: string | null;
-  orderCurrency: string | null;
-  items: Array<{
-    productNumber: string | null;
-    productName: string | null;
-    ean: string | null;
-    quantity: string | null;
-    unitPrice: string | null;
-    currency: string | null;
-  }>;
-}, ourFid: string): object {
-  const now = new Date().toISOString();
+function apiError(result: ApiCallResult): string {
+  return result.json.message || result.body.substring(0, 1_000) || `HTTP ${result.httpStatus}`;
+}
 
-  const orderItems = note.items.map((item) => ({
-    Name: item.productName ?? "",
-    Sku: item.productNumber ?? "",
-    UnitGtin: item.ean ?? "",
-    OrderedQty: item.quantity ? parseFloat(item.quantity) : 0,
-    CaseGtin: "",
-    CaseQty: 0,
-    BundleGtin: "",
-    BundleQty: 0,
-    OrderLevel: "unit",
-  }));
+async function callMasterdata(
+  endpoint: string,
+  authHeader: string,
+  request: object,
+  step: string,
+  logCtx: LogContext,
+): Promise<ApiCallResult> {
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: authHeader },
+      body: JSON.stringify(request),
+    });
+    const body = await response.text();
+    const json = parseApiBody(body);
+    const alreadyExists = json.errorCode === "BO_ALREADY_EXIST";
+    const success = (response.ok && json.error !== true) || alreadyExists;
 
+    await logStep({
+      ...logCtx,
+      step,
+      httpStatus: response.status,
+      success,
+      responseBody: body,
+      errorMessage: success ? undefined : apiError({ httpStatus: response.status, body, json, success, alreadyExists }),
+    });
+
+    return { httpStatus: response.status, body, json, success, alreadyExists };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await logStep({ ...logCtx, step, success: false, errorMessage: `Network error: ${message}` });
+    throw new Error(`${step} network error: ${message}`);
+  }
+}
+
+async function resolveOwnOrganizationKey(
+  endpoint: string,
+  authHeader: string,
+  ownEoid: string,
+  logCtx: LogContext,
+): Promise<string> {
+  const result = await callMasterdata(
+    endpoint,
+    authHeader,
+    { object: "Organization", action: "List", data: { limit: 100, startKey: "", offset: 0, indexes: [] } },
+    "Organization Lookup",
+    logCtx,
+  );
+  if (!result.success || !Array.isArray(result.json.data)) {
+    throw new Error(`Could not read the TRULO organisation: ${apiError(result)}`);
+  }
+
+  const organisation = result.json.data.find((entry) => {
+    if (!entry || typeof entry !== "object") return false;
+    return (entry as { Eoid?: unknown }).Eoid === ownEoid;
+  }) as { KEY?: unknown } | undefined;
+  const organizationKey = typeof organisation?.KEY === "string" ? organisation.KEY : undefined;
+
+  if (!organizationKey) {
+    throw new Error(`The configured TRULO EOID (${ownEoid}) has no Organisation record in Osapiens.`);
+  }
+  return organizationKey;
+}
+
+async function ensureSoldToParty(
+  endpoint: string,
+  authHeader: string,
+  organizationKey: string,
+  note: {
+    eoid: string;
+    customerName: string | null;
+    addressStreet: string | null;
+    addressCity: string | null;
+    addressPostalCode: string | null;
+    addressCountry: string | null;
+  },
+  logCtx: LogContext,
+): Promise<void> {
+  const read = await callMasterdata(
+    endpoint,
+    authHeader,
+    { object: "Customer", action: "Read", key: note.eoid },
+    "Sold-to Party Lookup",
+    logCtx,
+  );
+  if (!read.success) throw new Error(`Sold-to Party lookup failed: ${apiError(read)}`);
+  if (read.json.data != null) return;
+
+  const create = await callMasterdata(
+    endpoint,
+    authHeader,
+    {
+      object: "Customer",
+      action: "Create",
+      key: note.eoid,
+      data: {
+        EU: true,
+        ExternalRefNumber: note.eoid,
+        OrganizationRef: organizationKey,
+        Eoid: note.eoid,
+        Gln: "",
+        VAT: "",
+        Name: note.customerName ?? note.eoid,
+        Address: {
+          Country: note.addressCountry ?? "",
+          PostalCode: note.addressPostalCode ?? "",
+          Street: note.addressStreet ?? "",
+          StreetNumber: "",
+          City: note.addressCity ?? "",
+        },
+      },
+    },
+    "Sold-to Party Create",
+    logCtx,
+  );
+  if (!create.success) throw new Error(`Sold-to Party creation failed: ${apiError(create)}`);
+  console.log(`[Osapiens] Sold-to Party ready for EOID: ${note.eoid}`);
+}
+
+async function ensureDeliveryPoint(
+  endpoint: string,
+  authHeader: string,
+  organizationKey: string,
+  note: {
+    fid: string;
+    eoid: string;
+    customerName: string | null;
+    addressStreet: string | null;
+    addressCity: string | null;
+    addressPostalCode: string | null;
+    addressCountry: string | null;
+  },
+  logCtx: LogContext,
+): Promise<void> {
+  // The timestamped key avoids historic non-DeliveryPoint key collisions. Osapiens
+  // resolves destination selection by the FID, which remains stable for the customer.
+  const deliveryPointKey = `dp-${note.fid}-${Date.now()}`;
+  const create = await callMasterdata(
+    endpoint,
+    authHeader,
+    {
+      object: "DeliveryPoint",
+      action: "Create",
+      key: deliveryPointKey,
+      data: {
+        EU: true,
+        Fid: note.fid,
+        ExternalRefNumber: note.fid,
+        Eoid: note.eoid,
+        Gln: "",
+        VAT: "",
+        Name: note.customerName ?? note.fid,
+        // The supplied API specification has no CustomerRef on DeliveryPoint. Both
+        // Customer (portal label: Sold-to Party) and DeliveryPoint require the same
+        // existing TRULO OrganizationRef; the common customer EOID/FID is carried
+        // into the embedded SalesOrder party and destination objects.
+        OrganizationRef: organizationKey,
+        Address: {
+          Country: note.addressCountry ?? "",
+          PostalCode: note.addressPostalCode ?? "",
+          Street: note.addressStreet ?? "",
+          StreetNumber: "",
+          City: note.addressCity ?? "",
+        },
+      },
+    },
+    "DeliveryPoint Create",
+    logCtx,
+  );
+  if (!create.success) throw new Error(`DeliveryPoint creation failed for FID ${note.fid}: ${apiError(create)}`);
+  console.log(`[Osapiens] DeliveryPoint ready for FID: ${note.fid}`);
+}
+
+function buildSalesOrderPayload(
+  note: {
+    xentralNumber: string;
+    customerName: string | null;
+    eoid: string | null;
+    fid: string | null;
+    addressStreet: string | null;
+    addressCity: string | null;
+    addressPostalCode: string | null;
+    addressCountry: string | null;
+    deliveryDate: string | null;
+    items: Array<{
+      productNumber: string | null;
+      productName: string | null;
+      ean: string | null;
+      quantity: string | null;
+    }>;
+  },
+  ourFid: string,
+): object {
   return {
     object: "SalesOrder",
     action: "Create",
     key: note.xentralNumber,
     data: {
       OrderNumber: note.xentralNumber,
-      CreationDate: now,
+      CreationDate: new Date().toISOString(),
       DeliveryDate: note.deliveryDate ?? "",
       State: "CREATED",
       SendingSystem: "TNT-Bridge",
+      // SoldToParty is the embedded address data expected by SalesOrder.
       SoldToParty: {
         Name: note.customerName ?? "",
         EoId: note.eoid ?? "",
@@ -117,8 +299,9 @@ function buildSalesOrderPayload(note: {
         City: note.addressCity ?? "",
         Zip: note.addressPostalCode ?? "",
         Country: note.addressCountry ?? "",
-        ExternalReference: "",
+        ExternalReference: note.eoid ?? "",
       },
+      // The customer destination that Osapiens scanner operations must resolve.
       DeliveryPoint: {
         FacilityId: note.fid ?? "",
         Name: note.customerName ?? "",
@@ -126,7 +309,7 @@ function buildSalesOrderPayload(note: {
         City: note.addressCity ?? "",
         Zip: note.addressPostalCode ?? "",
         Country: note.addressCountry ?? "",
-        ExternalReference: "",
+        ExternalReference: note.fid ?? "",
       },
       ScanningPoint: {
         FacilityId: ourFid,
@@ -137,7 +320,17 @@ function buildSalesOrderPayload(note: {
         ExternalReference: "",
         Name: "Trulo GmbH Warehouse",
       },
-      OrderItems: orderItems,
+      OrderItems: note.items.map((item) => ({
+        Name: item.productName ?? "",
+        Sku: item.productNumber ?? "",
+        UnitGtin: item.ean ?? "",
+        OrderedQty: item.quantity ? parseFloat(item.quantity) : 0,
+        CaseGtin: "",
+        CaseQty: 0,
+        BundleGtin: "",
+        BundleQty: 0,
+        OrderLevel: "unit",
+      })),
       OverallScannedCodes: [],
       CurrentlyScannedCodes: [],
       PickedItems: {},
@@ -146,120 +339,9 @@ function buildSalesOrderPayload(note: {
   };
 }
 
-// ─── Delivery Point upsert ───────────────────────────────────────────────────
-
-async function ensureDeliveryPoint(
-  endpoint: string,
-  authHeader: string,
-  note: {
-    fid: string;
-    eoid: string | null;
-    customerName: string | null;
-    addressStreet: string | null;
-    addressCity: string | null;
-    addressPostalCode: string | null;
-    addressCountry: string | null;
-  },
-  logCtx: { deliveryNoteId: number; xentralNumber: string; customerName: string | null }
-): Promise<void> {
-  // Step 1: Ensure the customer Organisation exists
-  const orgKey = note.eoid ?? note.fid;
-  const orgReadResp = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: authHeader },
-    body: JSON.stringify({ object: "Organization", action: "Read", key: orgKey }),
-  });
-  const orgReadJson = (await orgReadResp.json()) as { error?: boolean; data?: unknown };
-
-  if (orgReadJson.error !== false || orgReadJson.data == null) {
-    const orgCreateResp = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: authHeader },
-      body: JSON.stringify({
-        object: "Organization",
-        action: "Create",
-        key: orgKey,
-        data: {
-          Name: note.customerName ?? orgKey,
-          Eoid: note.eoid ?? "",
-          isTpdRelevant: true,
-          IsDefault: false,
-          Address: {
-            Country: note.addressCountry ?? "",
-            PostalCode: note.addressPostalCode ?? "",
-            Street: note.addressStreet ?? "",
-            StreetNumber: "",
-            City: note.addressCity ?? "",
-          },
-        },
-      }),
-    });
-    const orgCreateJson = (await orgCreateResp.json()) as { error?: boolean; message?: string };
-    const orgBody = JSON.stringify(orgCreateJson);
-    await logStep({
-      ...logCtx,
-      step: "Organisation",
-      httpStatus: orgCreateResp.status,
-      success: !orgCreateJson.error,
-      responseBody: orgBody,
-      errorMessage: orgCreateJson.error ? orgCreateJson.message : undefined,
-    });
-    if (orgCreateJson.error) {
-      console.warn(`[Osapiens] Organization Create warning for ${orgKey}:`, orgCreateJson.message);
-    } else {
-      console.log(`[Osapiens] Organization created for EOID: ${orgKey}`);
-    }
-  }
-
-  // Step 2: Always Create DeliveryPoint with unique timestamped key to avoid ghost-record collisions
-  const dpKey = `dp-${note.fid}-${Date.now()}`;
-  const createResp = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: authHeader },
-    body: JSON.stringify({
-      object: "DeliveryPoint",
-      action: "Create",
-      key: dpKey,
-      data: {
-        EU: true,
-        Fid: note.fid,
-        ExternalRefNumber: note.fid,
-        Eoid: note.eoid ?? "",
-        Gln: "",
-        VAT: "",
-        Name: note.customerName ?? note.fid,
-        OrganizationRef: orgKey,
-        Address: {
-          Country: note.addressCountry ?? "",
-          PostalCode: note.addressPostalCode ?? "",
-          Street: note.addressStreet ?? "",
-          StreetNumber: "",
-          City: note.addressCity ?? "",
-        },
-      },
-    }),
-  });
-  const createJson = (await createResp.json()) as { error?: boolean; message?: string };
-  const dpBody = JSON.stringify(createJson);
-  await logStep({
-    ...logCtx,
-    step: "DeliveryPoint",
-    httpStatus: createResp.status,
-    success: !createJson.error,
-    responseBody: dpBody,
-    errorMessage: createJson.error ? createJson.message : undefined,
-  });
-  if (createJson.error) {
-    throw new Error(`DeliveryPoint Create failed for FID ${note.fid}: ${createJson.message}`);
-  } else {
-    console.log(`[Osapiens] DeliveryPoint created OK for FID: ${note.fid} (key: ${dpKey})`);
-  }
-}
-
-// ─── Sender ───────────────────────────────────────────────────────────────────
-
 export interface SendResult {
   success: boolean;
+  alreadyExisted?: boolean;
   statusCode?: number;
   responseBody?: string;
   error?: string;
@@ -267,53 +349,33 @@ export interface SendResult {
 
 export async function sendDispatchToOsapiens(deliveryNoteId: number): Promise<SendResult> {
   const cfg = getOsapiensConfig();
-
   if (!cfg.apiUrl || !cfg.username || !cfg.password || !cfg.customer) {
-    return {
-      success: false,
-      error:
-        "Osapiens API credentials are not configured. Please add OSAPIENS_API_URL, OSAPIENS_USERNAME, OSAPIENS_PASSWORD, and OSAPIENS_CUSTOMER in the app secrets.",
-    };
+    return { success: false, error: "Osapiens API credentials are not configured." };
   }
-
-  if (!cfg.ourFid) {
-    return {
-      success: false,
-      error: "Our warehouse FID is not configured. Please add OSAPIENS_OUR_FID in the app secrets.",
-    };
+  if (!cfg.ourFid || !cfg.ourEoid) {
+    return { success: false, error: "TRULO warehouse FID or EOID is not configured in the app secrets." };
   }
 
   const note = await getDeliveryNoteById(deliveryNoteId);
-  if (!note) {
-    return { success: false, error: `Delivery note ${deliveryNoteId} not found` };
-  }
-
-  if (!note.fid) {
-    return {
-      success: false,
-      error: `Customer FID is missing for this order. Please add the customer's FID to Xentral (freifeld6) and re-fetch the order.`,
-    };
-  }
-
-  if (!note.eoid) {
-    return {
-      success: false,
-      error: `Customer EOID is missing for this order. Please add the customer's EOID to Xentral (freifeld5) and re-fetch the order.`,
-    };
-  }
+  if (!note) return { success: false, error: `Delivery note ${deliveryNoteId} not found` };
+  if (!note.fid) return { success: false, error: "Customer FID is missing. Add it to Xentral freifeld6 and re-fetch the order." };
+  if (!note.eoid) return { success: false, error: "Customer EOID is missing. Add it to Xentral freifeld5 and re-fetch the order." };
 
   const endpoint = `${cfg.apiUrl.replace(/\/$/, "")}/data/in/rest/${cfg.customer}/tpd/masterdata-v1`;
-  const authString = `un.${cfg.username}:${cfg.password}`;
-  const authHeader = `Basic ${Buffer.from(authString).toString("base64")}`;
-
-  const logCtx = {
-    deliveryNoteId,
-    xentralNumber: note.xentralNumber,
-    customerName: note.customerName,
-  };
+  const authHeader = `Basic ${Buffer.from(`un.${cfg.username}:${cfg.password}`).toString("base64")}`;
+  const logCtx: LogContext = { deliveryNoteId, xentralNumber: note.xentralNumber, customerName: note.customerName };
 
   try {
-    await ensureDeliveryPoint(endpoint, authHeader, {
+    const organizationKey = await resolveOwnOrganizationKey(endpoint, authHeader, cfg.ourEoid, logCtx);
+    await ensureSoldToParty(endpoint, authHeader, organizationKey, {
+      eoid: note.eoid,
+      customerName: note.customerName,
+      addressStreet: note.addressStreet,
+      addressCity: note.addressCity,
+      addressPostalCode: note.addressPostalCode,
+      addressCountry: note.addressCountry,
+    }, logCtx);
+    await ensureDeliveryPoint(endpoint, authHeader, organizationKey, {
       fid: note.fid,
       eoid: note.eoid,
       customerName: note.customerName,
@@ -322,56 +384,32 @@ export async function sendDispatchToOsapiens(deliveryNoteId: number): Promise<Se
       addressPostalCode: note.addressPostalCode,
       addressCountry: note.addressCountry,
     }, logCtx);
-  } catch (dpErr: unknown) {
-    const msg = dpErr instanceof Error ? dpErr.message : String(dpErr);
-    console.error("[Osapiens] DeliveryPoint upsert failed:", msg);
-    return { success: false, error: `Could not register customer delivery point in Osapiens: ${msg}` };
-  }
 
-  const payload = buildSalesOrderPayload(note, cfg.ourFid);
-
-  console.log(`[Osapiens] Creating Sales Order for delivery note ${note.xentralNumber} (DB id: ${deliveryNoteId})`);
-  console.log(`[Osapiens] Endpoint: ${endpoint}`);
-  console.log(`[Osapiens] Customer: ${note.customerName}, FID: ${note.fid}, EOID: ${note.eoid}`);
-
-  try {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: authHeader },
-      body: JSON.stringify(payload),
-    });
-
-    const responseBody = await response.text();
-    console.log(`[Osapiens] Response: ${response.status} — ${responseBody.substring(0, 200)}`);
-
-    await logStep({
-      ...logCtx,
-      step: "SalesOrder",
-      httpStatus: response.status,
-      success: response.ok,
-      responseBody,
-      errorMessage: response.ok ? undefined : responseBody.substring(0, 1000),
-    });
-
-    if (response.ok) {
-      return { success: true, statusCode: response.status, responseBody };
-    } else {
+    console.log(`[Osapiens] Creating SalesOrder ${note.xentralNumber} for destination FID ${note.fid}`);
+    const result = await callMasterdata(
+      endpoint,
+      authHeader,
+      buildSalesOrderPayload(note, cfg.ourFid),
+      "SalesOrder Create",
+      logCtx,
+    );
+    if (!result.success) {
       return {
         success: false,
-        statusCode: response.status,
-        responseBody,
-        error: `Osapiens API returned ${response.status}: ${responseBody.substring(0, 500)}`,
+        statusCode: result.httpStatus,
+        responseBody: result.body,
+        error: `Osapiens API returned ${result.httpStatus}: ${apiError(result)}`,
       };
     }
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`[Osapiens] Network error:`, message);
-    await logStep({
-      ...logCtx,
-      step: "SalesOrder",
-      success: false,
-      errorMessage: `Network error: ${message}`,
-    });
-    return { success: false, error: `Network error: ${message}` };
+    return {
+      success: true,
+      alreadyExisted: result.alreadyExists,
+      statusCode: result.httpStatus,
+      responseBody: result.body,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[Osapiens] Submission failed:", message);
+    return { success: false, error: message };
   }
 }

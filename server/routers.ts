@@ -7,6 +7,7 @@ import { TRPCError } from "@trpc/server";
 import { listDeliveryNotes, getDeliveryNoteById, deleteDeliveryNote, bulkDeleteDeliveryNotesByStatus, markSentToOsapiens, markOsapiensSendError, getOsapiensLogs } from "./db";
 import { getLogEntries } from "./logBuffer";
 import { sendDispatchToOsapiens, isOsapiensConfigured } from "./osapiensSender";
+import { refreshDispatchQrForOrder } from "./dispatchQrRefresh";
 import { refreshProductCache, getCacheStats } from "./productCache";
 import { retryDeliveryNote } from "./webhookProcessor";
 import { fetchAndProcessDeliveryNotes, fetchDeliveryNoteByDocumentNumber } from "./xentralPoller";
@@ -33,7 +34,7 @@ export const appRouter = router({
         z.object({
           page: z.number().min(1).default(1),
           pageSize: z.number().min(1).max(100).default(20),
-          status: z.enum(["pending", "ready", "error"]).optional(),
+          status: z.enum(["pending", "ready", "sent", "error"]).optional(),
           search: z.string().optional(),
         })
       )
@@ -108,8 +109,7 @@ export const appRouter = router({
       }),
 
     /**
-     * Send a dispatch event for a delivery note to the Osapiens API.
-     * Available to all authenticated users (not admin-only).
+     * Create or confirm a SalesOrder for a delivery note in Osapiens.
      */
     sendToOsapiens: publicProcedure
       .input(z.object({ id: z.number() }))
@@ -117,7 +117,22 @@ export const appRouter = router({
         const result = await sendDispatchToOsapiens(input.id);
         if (result.success) {
           await markSentToOsapiens(input.id);
-          return { success: true, message: "Dispatch event sent to Osapiens successfully" };
+          let qrRefreshed = true;
+          try {
+            await refreshDispatchQrForOrder(input.id);
+          } catch (error) {
+            // The sales order is safely sent even if a display QR refresh fails.
+            qrRefreshed = false;
+            console.warn("[QR] Sent order QR refresh failed:", error);
+          }
+          return {
+            success: true,
+            alreadyExisted: result.alreadyExisted ?? false,
+            qrRefreshed,
+            message: result.alreadyExisted
+              ? "SalesOrder already existed in Osapiens — confirmed as sent"
+              : "SalesOrder sent to Osapiens successfully",
+          };
         } else {
           await markOsapiensSendError(input.id, result.error ?? "Unknown error");
           throw new TRPCError({

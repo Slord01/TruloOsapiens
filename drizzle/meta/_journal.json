@@ -50,6 +50,13 @@
       "when": 1783597442958,
       "tag": "0006_eminent_korath",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1787823854129,
+      "tag": "0007_material_paladin",
+      "breakpoints": true
     }
   ]
 }

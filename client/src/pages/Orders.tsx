@@ -33,7 +33,7 @@ import {
 } from "lucide-react";
 
 const PAGE_SIZE = 20;
-type StatusFilter = "all" | "ready" | "error" | "pending";
+type StatusFilter = "all" | "ready" | "sent" | "error" | "pending";
 
 export default function Orders() {
   const [, navigate] = useLocation();
@@ -135,9 +135,9 @@ export default function Orders() {
 
   // Send a single order to Osapiens
   const sendToOsapiensMutation = trpc.orders.sendToOsapiens.useMutation({
-    onSuccess: (_data, variables) => {
+    onSuccess: (data) => {
       utils.orders.list.invalidate();
-      toast.success("Dispatch event sent to Osapiens");
+      toast.success(data.qrRefreshed ? `${data.message} QR code refreshed.` : data.message);
     },
     onError: (err) => {
       toast.error(`Send to Osapiens failed: ${err.message}`);
@@ -159,6 +159,7 @@ export default function Orders() {
   const statusTabs: { label: string; value: StatusFilter }[] = [
     { label: "All", value: "all" },
     { label: "Ready", value: "ready" },
+    { label: "Sent", value: "sent" },
     { label: "Error", value: "error" },
     { label: "Pending", value: "pending" },
   ];
@@ -370,7 +371,7 @@ export default function Orders() {
                 >
                   <div
                     className={`h-10 w-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                      note.status === "ready"
+                      note.status === "ready" || note.status === "sent"
                         ? "bg-[oklch(0.20_0.06_145)]"
                         : note.status === "error"
                         ? "bg-[oklch(0.18_0.06_25)]"
@@ -379,6 +380,8 @@ export default function Orders() {
                   >
                     {note.status === "ready" ? (
                       <QrCode className="h-5 w-5 text-[oklch(0.65_0.18_145)]" />
+                    ) : note.status === "sent" ? (
+                      <CheckCircle2 className="h-5 w-5 text-[oklch(0.72_0.18_145)]" />
                     ) : note.status === "error" ? (
                       <AlertCircle className="h-5 w-5 text-[oklch(0.62_0.22_25)]" />
                     ) : (
@@ -391,7 +394,7 @@ export default function Orders() {
                       <span className="font-semibold text-foreground text-sm">
                         {note.xentralNumber || `#${note.id}`}
                       </span>
-                      <StatusBadge status={note.status as "ready" | "error" | "pending"} />
+                      <StatusBadge status={note.status as "ready" | "sent" | "error" | "pending"} />
                     </div>
                     <p className="text-sm text-muted-foreground truncate mt-0.5">
                       {note.customerName || "Unknown customer"}
@@ -416,7 +419,8 @@ export default function Orders() {
 
                 {/* Per-row action buttons — appear on hover */}
                 <div className="absolute top-1/2 -translate-y-1/2 right-3 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  {/* Send to Osapiens — only shown for READY orders */}
+                  {/* Send to Osapiens — only shown for READY orders. Sent orders can be
+                      re-synchronised from their detail page without leaving this state. */}
                   {note.status === "ready" && (
                     <button
                       onClick={(e) => {
@@ -424,18 +428,10 @@ export default function Orders() {
                         sendToOsapiensMutation.mutate({ id: note.id });
                       }}
                       disabled={sendToOsapiensMutation.isPending && sendToOsapiensMutation.variables?.id === note.id}
-                      className={`h-7 w-7 rounded-lg flex items-center justify-center transition-colors ${
-                        note.sentToOsapiens
-                          ? "text-[oklch(0.65_0.18_145)] bg-[oklch(0.20_0.06_145)]"
-                          : "text-muted-foreground hover:text-[oklch(0.65_0.18_145)] hover:bg-[oklch(0.20_0.06_145)]"
-                      }`}
-                      title={note.sentToOsapiens ? "Already sent to Osapiens — click to resend" : "Send to Osapiens"}
+                      className="h-7 w-7 rounded-lg flex items-center justify-center transition-colors text-muted-foreground hover:text-[oklch(0.65_0.18_145)] hover:bg-[oklch(0.20_0.06_145)]"
+                      title="Send SalesOrder to Osapiens"
                     >
-                      {note.sentToOsapiens ? (
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                      ) : (
-                        <Send className="h-3.5 w-3.5" />
-                      )}
+                      <Send className="h-3.5 w-3.5" />
                     </button>
                   )}
                   <button

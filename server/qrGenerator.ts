@@ -2,13 +2,13 @@
  * QR code generator for Osapiens Dispatch (OSAPV1EDP) plain text payloads.
  *
  * Format (semicolon-delimited plain text):
- *   OSAPV1EDP;<EOID>;<ISO8601_datetime>;<destType>;<FID>;<transportMode>;<vehicle>;
+ *   OSAPV1EDP;<referenceDocument>;<ISO8601_datetime>;<destType>;<FID>;<transportMode>;<vehicle>;
  *   <SSCC>;<trackingNo>;<EMCS>;<SAAD>;<MRN>;<autoArrival>;<custom13>;<custom14>;
  *   <productCount>;<GTIN1>;<qty1>[;<GTIN2>;<qty2>...]
  *
  * Field positions:
  *   0  - Version/Process Prefix: always "OSAPV1EDP"
- *   1  - Reference Document / EOID (customer Economic Operator ID)
+ *   1  - Reference Document (Xentral delivery-note number)
  *   2  - Dispatch Event Time (ISO 8601 with timezone, e.g. 2025-04-28T15:30:00+01:00)
  *   3  - Destination Type (2 = fixed quantity EU)
  *   4  - Destination FID (customer Facility Identifier)
@@ -41,8 +41,8 @@ const QR_OPTIONS: QRCode.QRCodeToDataURLOptions = {
 };
 
 export interface DispatchQrParams {
-  /** Customer EOID (Economic Operator ID) from Xentral freifeld5 */
-  eoid: string;
+  /** Dispatch reference document — the Xentral delivery-note number */
+  referenceDocument: string;
   /** Customer Facility ID from Xentral freifeld6 */
   fid: string;
   /** Dispatch event time — defaults to current time if not provided */
@@ -63,10 +63,6 @@ export interface DispatchQrParams {
   saad?: string;
   /** MRN export declaration number (optional) */
   mrn?: string;
-  /** Payment method (field 13 — e.g. Invoice, Prepayment) */
-  paymentMethod?: string;
-  /** Delivery/shipping method (field 14 — e.g. DHL, Courier) */
-  deliveryMethod?: string;
   /** Product line items — each must have a GTIN and quantity */
   products: Array<{
     gtin: string;
@@ -99,7 +95,7 @@ function formatEventTime(date: Date): string {
  */
 export function buildDispatchQrText(params: DispatchQrParams): string {
   const {
-    eoid,
+    referenceDocument,
     fid,
     eventTime = new Date(),
     destinationType = 2,
@@ -110,14 +106,12 @@ export function buildDispatchQrText(params: DispatchQrParams): string {
     emcs = "",
     saad = "",
     mrn = "",
-    paymentMethod = "",
-    deliveryMethod = "",
     products,
   } = params;
 
   const fields: string[] = [
     "OSAPV1EDP",          // 0 - Version/Process Prefix
-    eoid,                  // 1 - EOID (Reference Document)
+    referenceDocument,     // 1 - dispatch reference document
     formatEventTime(eventTime), // 2 - Dispatch Event Time
     String(destinationType), // 3 - Destination Type
     fid,                   // 4 - Destination FID
@@ -129,9 +123,9 @@ export function buildDispatchQrText(params: DispatchQrParams): string {
     saad,                  // 10 - SAAD
     mrn,                   // 11 - MRN
     "FALSE",               // 12 - Auto Arrival
-    paymentMethod,         // 13 - Payment Method
-    deliveryMethod,        // 14 - Delivery Method
-    "0",                   // 15 - Product Count (always 0 per Osapiens convention)
+    "",                    // 13 - Custom (reserved / empty)
+    "",                    // 14 - Custom (reserved / empty)
+    String(products.length), // 15 - product count
   ];
 
   // Append product pairs: GTIN;Quantity for each product
@@ -156,7 +150,7 @@ export async function generateDispatchQrCode(params: DispatchQrParams): Promise<
   if (plainText.length > 2953) {
     console.warn(
       `[QR] Dispatch payload size ${plainText.length} chars exceeds QR code limit (2953). ` +
-        `EOID: ${params.eoid}`
+        `reference: ${params.referenceDocument}`
     );
   }
 

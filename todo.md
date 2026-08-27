@@ -168,3 +168,19 @@
 - [x] Register /logs route in App.tsx
 - [x] Add "Logs" nav button in Orders.tsx header
 - [x] All 33 Vitest tests passing
+
+## Phase 19 — Correct Osapiens Party Mapping and Sent Status
+
+- [x] Validate the Osapiens Sold-to Party masterdata object, create action, and SalesOrder reference fields against the supplied interface specification
+- [x] Replace customer Organisation creation with Sold-to Party creation in the Osapiens sender
+- [x] Create Customer (portal label: Sold-to Party) and DeliveryPoint records with the specification-required TRULO OrganizationRef; carry the customer's EOID and FID into the embedded SalesOrder party and destination objects
+- [x] Treat an Osapiens BO_ALREADY_EXIST SalesOrder response as a confirmed sent state, not as a failed retry
+- [x] Update Orders and Order Detail UI to show a Sent status and separate Sent filter after successful Osapiens submission
+- [x] Add or update Vitest coverage for corrected Osapiens sender response handling and Sent status display logic
+- [x] Verify revised mapping safely with 35 passing Vitest tests, clean TypeScript validation, and visual Sent-status checks; save checkpoint and push to GitHub
+
+## Phase 20 — QR Destination Preselection
+
+- [x] Review the supplied Osapiens QR specification and map the field required to preselect the dispatch destination after a QR scan
+- [x] Update the dispatch QR payload generator to include the customer delivery destination reference in the specified position and format
+- [x] Update QR tests with the required destination-preselection data

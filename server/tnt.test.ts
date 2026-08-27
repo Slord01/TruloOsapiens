@@ -186,7 +186,7 @@ describe("mapDeliveryNoteToSalesOrder", () => {
 // ─── Dispatch QR Generator Tests ─────────────────────────────────────────────
 
 const sampleDispatchParams: DispatchQrParams = {
-  eoid: "DE12345678901234",
+  referenceDocument: "LN-2025-00123",
   fid: "OSAP-FID-001",
   eventTime: new Date("2025-04-28T15:30:00.000Z"),
   destinationType: 2,
@@ -204,13 +204,13 @@ describe("buildDispatchQrText", () => {
     expect(text).toMatch(/^OSAPV1EDP;/);
     const fields = text.split(";");
     expect(fields[0]).toBe("OSAPV1EDP");
-    expect(fields[1]).toBe("DE12345678901234");   // EOID
+    expect(fields[1]).toBe("LN-2025-00123");      // delivery-note reference
     expect(fields[3]).toBe("2");                   // destination type
     expect(fields[4]).toBe("OSAP-FID-001");        // FID
     expect(fields[5]).toBe("3");                   // transport mode
     expect(fields[6]).toBe("MA FH 42");            // vehicle
     expect(fields[12]).toBe("FALSE");              // auto arrival
-    expect(fields[15]).toBe("0");                  // product count (always 0)
+    expect(fields[15]).toBe("2");                  // product count
     expect(fields[16]).toBe("4012345678901");      // GTIN 1
     expect(fields[17]).toBe("50");                 // qty 1
     expect(fields[18]).toBe("4012345678902");      // GTIN 2
@@ -232,7 +232,7 @@ describe("buildDispatchQrText", () => {
 
   it("empty optional fields produce empty semicolons", () => {
     const params: DispatchQrParams = {
-      eoid: "TEST-EOID",
+      referenceDocument: "TEST-DN-001",
       fid: "TEST-FID",
       products: [{ gtin: "1234567890123", quantity: 10 }],
     };
@@ -249,7 +249,7 @@ describe("buildDispatchQrText", () => {
   it("matches the example from the Osapiens Excel tool", () => {
     // Example: OSAPV1EDP;Kostas1;2025-04-28T15:30:00+01:00;2;OSAP-FID-001;2;MA FH 42;Some SSCC;Some Tracking Number;Some EMCS;Some SAAD;Some MRN;FALSE;;;0;05201222501312;4
     const params: DispatchQrParams = {
-      eoid: "Kostas1",
+      referenceDocument: "ORDER-002345",
       fid: "OSAP-FID-001",
       destinationType: 2,
       transportMode: 2,
@@ -264,7 +264,7 @@ describe("buildDispatchQrText", () => {
     const text = buildDispatchQrText(params);
     const fields = text.split(";");
     expect(fields[0]).toBe("OSAPV1EDP");
-    expect(fields[1]).toBe("Kostas1");
+    expect(fields[1]).toBe("ORDER-002345");
     expect(fields[4]).toBe("OSAP-FID-001");
     expect(fields[5]).toBe("2");
     expect(fields[6]).toBe("MA FH 42");
@@ -274,14 +274,14 @@ describe("buildDispatchQrText", () => {
     expect(fields[10]).toBe("Some SAAD");
     expect(fields[11]).toBe("Some MRN");
     expect(fields[12]).toBe("FALSE");
-    expect(fields[15]).toBe("0");
+    expect(fields[15]).toBe("1");
     expect(fields[16]).toBe("05201222501312");
     expect(fields[17]).toBe("4");
   });
 
   it("dispatch payload size stays within QR code limits for 10 products", () => {
     const params: DispatchQrParams = {
-      eoid: "DE12345678901234",
+      referenceDocument: "LN-2025-00123",
       fid: "OSAP-FID-001",
       products: Array.from({ length: 10 }, (_, i) => ({
         gtin: `401234567890${i}`,

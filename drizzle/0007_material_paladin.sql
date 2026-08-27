@@ -1,0 +1,1 @@
+ALTER TABLE `delivery_notes` MODIFY COLUMN `status` enum('pending','ready','sent','error') NOT NULL DEFAULT 'pending';

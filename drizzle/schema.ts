@@ -76,8 +76,8 @@ export const deliveryNotes = mysqlTable("delivery_notes", {
   sentToOsapiensAt: bigint("sentToOsapiensAt", { mode: "number" }),
   /** Error message from last Osapiens send attempt (null if successful) */
   osapiensSendError: text("osapiensSendError"),
-  /** Processing status */
-  status: mysqlEnum("status", ["pending", "ready", "error"]).default("pending").notNull(),
+  /** Processing status — sent means the SalesOrder was confirmed by Osapiens */
+  status: mysqlEnum("status", ["pending", "ready", "sent", "error"]).default("pending").notNull(),
   /** Human-readable error message if status = error */
   errorMessage: text("errorMessage"),
   /** ISO date of the delivery note from Xentral */

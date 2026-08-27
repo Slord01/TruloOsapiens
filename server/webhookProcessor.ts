@@ -151,14 +151,12 @@ export async function processWebhookPayload(raw: unknown): Promise<{ id: number;
   let dispatchQrText: string | null = null;
   try {
     const qrParams: DispatchQrParams = {
-      eoid: mapping.eoid ?? "",
+      referenceDocument: xentralNumber,
       fid: mapping.fid ?? "",
       eventTime: new Date(),
       destinationType: 2,
       transportMode: 3,
       transportVehicle: "",
-      paymentMethod: mapping.paymentMethod ?? "",
-      deliveryMethod: mapping.deliveryMethod ?? "",
       products: qrProducts,
     };
     const qrResult = await generateDispatchQrCode(qrParams);
