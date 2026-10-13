@@ -191,4 +191,4 @@
 - [x] Paginate the Xentral delivery-note list so imports are not capped at the first 100 results
 - [x] Verify sales order 621314 is linked to delivery note 463288, searchable by sales-order number, and remains Ready
 - [x] Add regression coverage for multi-page Xentral import behaviour
-- [ ] Validate, checkpoint, and publish the corrected importer
+- [x] Validate, checkpoint, and publish the corrected importer
