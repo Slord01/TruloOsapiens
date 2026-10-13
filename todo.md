@@ -192,3 +192,10 @@
 - [x] Verify sales order 621314 is linked to delivery note 463288, searchable by sales-order number, and remains Ready
 - [x] Add regression coverage for multi-page Xentral import behaviour
 - [x] Validate, checkpoint, and publish the corrected importer
+
+## Phase 26 — Exclude Walk-in POS Orders
+
+- [x] Exclude `LAUFKUNDSCHAFT POS` from future Xentral import processing
+- [x] Hide historic `LAUFKUNDSCHAFT POS` records from operational order lists without deleting audit data
+- [x] Add regression coverage for list-level and detail-level customer-name exclusion
+- [x] Validate, checkpoint, and publish the walk-in order exclusion

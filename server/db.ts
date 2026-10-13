@@ -179,6 +179,9 @@ export async function listDeliveryNotes(opts: {
 
   const conditions = [];
   if (opts.status) conditions.push(eq(deliveryNotes.status, opts.status));
+  // Walk-in POS sales are explicitly outside the dispatch workflow. Preserve
+  // historic rows for auditability, but do not expose them in operational lists.
+  conditions.push(sql`LOWER(TRIM(${deliveryNotes.customerName})) <> 'laufkundschaft pos'`);
   if (opts.search) {
     conditions.push(
       sql`(${deliveryNotes.xentralNumber} LIKE ${`%${opts.search}%`} OR ${deliveryNotes.salesOrderNumber} LIKE ${`%${opts.search}%`} OR ${deliveryNotes.customerName} LIKE ${`%${opts.search}%`})`

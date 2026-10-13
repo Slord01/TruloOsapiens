@@ -187,6 +187,41 @@ describe("Xentral order importer", () => {
     expect(processWebhookPayload).not.toHaveBeenCalled();
   });
 
+  it("excludes LAUFKUNDSCHAFT POS before requesting document details", async () => {
+    const walkInOrder = {
+      ...tobaccoDocument("501524", "621316"),
+      documentAddress: { name: "  laufkundschaft   POS  " },
+    };
+    const fetchMock = fetchMockFor({
+      deliveryLists: { "1": [] },
+      salesLists: { "1": [walkInOrder] },
+    });
+
+    const result = await fetchDeliveryNoteByDocumentNumber("621316");
+
+    expect(result).toMatchObject({ fetched: 1, tobaccoFound: 0, imported: 0, errors: 0, skipped: 1 });
+    expect(processWebhookPayload).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/api/v3/salesOrders/501524"))).toBe(false);
+  });
+
+  it("excludes LAUFKUNDSCHAFT POS when the customer is available only in document details", async () => {
+    const listOrder = { id: "501525", documentNumber: "621317", status: "completed" };
+    const walkInDetail = {
+      ...tobaccoDocument("501525", "621317"),
+      documentAddress: { name: "LAUFKUNDSCHAFT POS" },
+    };
+    fetchMockFor({
+      deliveryLists: { "1": [] },
+      salesLists: { "1": [listOrder] },
+      detailById: { "501525": walkInDetail },
+    });
+
+    const result = await fetchDeliveryNoteByDocumentNumber("621317");
+
+    expect(result).toMatchObject({ fetched: 1, tobaccoFound: 0, imported: 0, errors: 0, skipped: 1 });
+    expect(processWebhookPayload).not.toHaveBeenCalled();
+  });
+
   it("backfills the linked sales-order number for an existing ready delivery note", async () => {
     const deliveryNote = {
       id: "232124",

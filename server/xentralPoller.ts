@@ -34,6 +34,7 @@ type XentralDocumentSource = "deliveryNote" | "salesOrder";
 
 const XENTRAL_PAGE_SIZE = 100;
 const POLLER_SOURCE_KEY = "__tntSource";
+const EXCLUDED_CUSTOMER_NAMES = new Set(["laufkundschaft pos"]);
 
 function endpointFor(source: XentralDocumentSource) {
   return source === "salesOrder" ? "salesOrders" : "deliveryNotes";
@@ -47,6 +48,29 @@ function storedXentralId(source: XentralDocumentSource, xentralId: string) {
 
 function sourceFor(note: Record<string, unknown>): XentralDocumentSource {
   return note[POLLER_SOURCE_KEY] === "salesOrder" ? "salesOrder" : "deliveryNote";
+}
+
+/**
+ * Walk-in POS sales are not dispatch orders and must never create a TNT record.
+ * Normalising makes the exclusion resilient to case and incidental whitespace
+ * differences in the Xentral customer name.
+ */
+function isExcludedCustomerName(customerName: unknown) {
+  const normalised = String(customerName ?? "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLocaleLowerCase("de-DE");
+  return EXCLUDED_CUSTOMER_NAMES.has(normalised);
+}
+
+function customerNameFromListDocument(document: Record<string, unknown>) {
+  const documentAddress = document.documentAddress as Record<string, unknown> | undefined;
+  return documentAddress?.name ?? documentAddress?.contactPerson;
+}
+
+function customerNameFromProcessedDocument(document: Record<string, unknown>) {
+  const customer = document.customer as Record<string, unknown> | undefined;
+  return customer?.companyName ?? customer?.name;
 }
 
 export interface PollResult {
@@ -460,6 +484,13 @@ async function processDocuments(
       return;
     }
 
+    // Exclude walk-in POS transactions before their detail/address calls when
+    // Xentral provides the name on the list record.
+    if (isExcludedCustomerName(customerNameFromListDocument(note))) {
+      result.skipped++;
+      return;
+    }
+
     let existing = await getDeliveryNoteByXentralId(localId).catch(() => null);
 
     // A SalesOrder import is the pre-delivery fallback. Do not create a second
@@ -501,6 +532,12 @@ async function processDocuments(
 
     try {
       const fullDocument = await fetchNoteDetail(baseUrl, nativeId, note, headers, source);
+      // Some Xentral list payloads omit documentAddress. Check the fully mapped
+      // document too so this customer can never enter the TNT database.
+      if (isExcludedCustomerName(customerNameFromProcessedDocument(fullDocument))) {
+        result.skipped++;
+        return;
+      }
       const positions = (fullDocument.positions as Array<Record<string, unknown>>) ?? [];
       if (!containsTobacco(positions)) {
         result.skipped++;
