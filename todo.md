@@ -184,3 +184,11 @@
 - [x] Review the supplied Osapiens QR specification and map the field required to preselect the dispatch destination after a QR scan
 - [x] Update the dispatch QR payload generator to include the customer delivery destination reference in the specified position and format
 - [x] Update QR tests with the required destination-preselection data
+
+## Phase 25 — Complete Recent Delivery Note Import
+
+- [x] Diagnose why Xentral delivery note 621314 is excluded from Fetch Orders
+- [x] Paginate the Xentral delivery-note list so imports are not capped at the first 100 results
+- [x] Verify sales order 621314 is linked to delivery note 463288, searchable by sales-order number, and remains Ready
+- [x] Add regression coverage for multi-page Xentral import behaviour
+- [ ] Validate, checkpoint, and publish the corrected importer

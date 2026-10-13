@@ -19,12 +19,35 @@
 
 import { processWebhookPayload } from "./webhookProcessor";
 import { refreshProductCache, isTobaccoProduct, isTobaccoProductNumber } from "./productCache";
-import { getDeliveryNoteByXentralId } from "./db";
+import {
+  getDeliveryNoteBySalesOrderId,
+  getDeliveryNoteByXentralId,
+  updateSalesOrderNumberBySalesOrderId,
+} from "./db";
 
 /** Module-level cache for payment method names — populated once per server session */
 let _pmCache: Record<string, string> | null = null;
 /** Module-level cache for shipping method names — populated once per server session */
 let _smCache: Record<string, string> | null = null;
+
+type XentralDocumentSource = "deliveryNote" | "salesOrder";
+
+const XENTRAL_PAGE_SIZE = 100;
+const POLLER_SOURCE_KEY = "__tntSource";
+
+function endpointFor(source: XentralDocumentSource) {
+  return source === "salesOrder" ? "salesOrders" : "deliveryNotes";
+}
+
+function storedXentralId(source: XentralDocumentSource, xentralId: string) {
+  // DeliveryNote and SalesOrder IDs are allocated from separate Xentral tables.
+  // Prefix SalesOrder IDs so the local unique key cannot collide with a delivery-note ID.
+  return source === "salesOrder" ? `sales-order-${xentralId}` : xentralId;
+}
+
+function sourceFor(note: Record<string, unknown>): XentralDocumentSource {
+  return note[POLLER_SOURCE_KEY] === "salesOrder" ? "salesOrder" : "deliveryNote";
+}
 
 export interface PollResult {
   fetched: number;
@@ -60,12 +83,15 @@ async function fetchNoteDetail(
   baseUrl: string,
   id: string,
   listNote: Record<string, unknown>,
-  headers: Record<string, string>
+  headers: Record<string, string>,
+  source: XentralDocumentSource = "deliveryNote"
 ): Promise<Record<string, unknown>> {
-  // V3 detail includes lineItems with product IDs — primary source
+  // V3 detail includes lineItems with product IDs — primary source.
+  // Completed SalesOrders are also valid import sources when no delivery note
+  // exists yet (for example, Xentral sales order 621314).
   // include[]=lineItems is required; without it Xentral omits the array entirely
   try {
-    const detailUrl = new URL(`${baseUrl}/api/v3/deliveryNotes/${id}`);
+    const detailUrl = new URL(`${baseUrl}/api/v3/${endpointFor(source)}/${id}`);
     detailUrl.searchParams.set("include[0]", "lineItems");
     const v3Response = await fetchWithTimeout(
       detailUrl.toString(),
@@ -79,11 +105,16 @@ async function fetchNoteDetail(
         (v3Note.address as Record<string, unknown> | undefined)?.id ?? ""
       );
 
+      const isSalesOrder = source === "salesOrder";
       // Remap V3 lineItems → positions shape expected by dataMapper
       const lineItems = (v3Note.lineItems as unknown[]) ?? [];
       // Extract sales order reference — id for API lookup, documentNumber for display
-      const salesOrderRef = v3Note.salesOrder as Record<string, unknown> | undefined;
-      const salesOrderNumber = String(salesOrderRef?.documentNumber ?? salesOrderRef?.number ?? "") || undefined;
+      const salesOrderRef = isSalesOrder
+        ? v3Note
+        : v3Note.salesOrder as Record<string, unknown> | undefined;
+      let salesOrderNumber = String(
+        salesOrderRef?.documentNumber ?? salesOrderRef?.number ?? ""
+      ) || undefined;
       const salesOrderId = String(salesOrderRef?.id ?? "") || undefined;
 
       // Fetch sales order details for payment method, delivery method, and item prices
@@ -92,12 +123,22 @@ async function fetchNoteDetail(
       let salesOrderLineItems: Array<Record<string, unknown>> = [];
       if (salesOrderId) {
         try {
-          const soUrl = new URL(`${baseUrl}/api/v3/salesOrders/${salesOrderId}`);
-          soUrl.searchParams.set("include[0]", "lineItems");
-          const soResp = await fetchWithTimeout(soUrl.toString(), { headers }, 8_000);
-          if (soResp.ok) {
-            const soData = (await soResp.json()) as { data?: Record<string, unknown> };
-            const so = soData?.data ?? soData as Record<string, unknown>;
+          let so: Record<string, unknown> | undefined;
+          if (isSalesOrder) {
+            so = v3Note;
+          } else {
+            const soUrl = new URL(`${baseUrl}/api/v3/salesOrders/${salesOrderId}`);
+            soUrl.searchParams.set("include[0]", "lineItems");
+            const soResp = await fetchWithTimeout(soUrl.toString(), { headers }, 8_000);
+            if (soResp.ok) {
+              const soData = (await soResp.json()) as { data?: Record<string, unknown> };
+              so = soData?.data ?? soData as Record<string, unknown>;
+            }
+          }
+          if (so) {
+            salesOrderNumber = String(
+              so.documentNumber ?? so.number ?? salesOrderNumber ?? ""
+            ) || undefined;
             // Payment method: financials.paymentMethod is {id: N} — resolve name from paymentMethods endpoint
             const financials = so.financials as Record<string, unknown> | undefined;
             const pmRaw = financials?.paymentMethod ?? financials?.paymentCondition ?? so.paymentMethod ?? so.payment;
@@ -293,7 +334,8 @@ async function fetchNoteDetail(
 
       return {
         ...v3Note,
-        id: v3Note.id,
+        [POLLER_SOURCE_KEY]: source,
+        id: storedXentralId(source, String(v3Note.id ?? id)),
         documentNumber: v3Note.documentNumber,
         number: v3Note.documentNumber,
         date: v3Note.documentDate,
@@ -324,122 +366,151 @@ async function fetchNoteDetail(
   // Last resort: list-level data only (mapping will likely produce an error record)
   return {
     ...listNote,
-    id: listNote.id,
+    [POLLER_SOURCE_KEY]: source,
+    id: storedXentralId(source, String(listNote.id ?? id)),
     documentNumber: listNote.documentNumber ?? listNote.number,
     number: listNote.documentNumber ?? listNote.number,
     date: listNote.documentDate ?? listNote.date,
   };
 }
 
-/**
- * Fetch delivery notes from Xentral created in the last `lookbackDays` days.
- * Only tobacco notes (Category 95000) are processed and saved to the database.
- * Notes are processed in parallel (up to CONCURRENCY at a time) with per-call
- * timeouts so the operation completes quickly even with many records.
- */
-export async function fetchAndProcessDeliveryNotes(
-  lookbackDays = 7
-): Promise<PollResult> {
-  const baseUrl = (process.env.XENTRAL_API_URL ?? process.env.XENTRAL_BASE_URL)?.replace(/\/$/, "");
-  const apiKey = process.env.XENTRAL_API_KEY;
+function createPollResult(): PollResult {
+  return { fetched: 0, tobaccoFound: 0, imported: 0, errors: 0, skipped: 0, details: [] };
+}
 
-  if (!baseUrl || !apiKey) {
-    throw new Error(
-      "XENTRAL_API_URL and XENTRAL_API_KEY must be set to fetch orders from Xentral"
-    );
+function addTobaccoFilter(url: URL, index: number) {
+  // Tobacco article numbers are maintained under the 95 prefix in Xentral.
+  // Filtering in Xentral keeps a multi-page sync within the API rate limit.
+  url.searchParams.set(`filter[${index}][key]`, "lineItems.number");
+  url.searchParams.set(`filter[${index}][op]`, "startsWith");
+  url.searchParams.set(`filter[${index}][value]`, "95");
+}
+
+async function listDocuments(
+  baseUrl: string,
+  headers: Record<string, string>,
+  source: XentralDocumentSource,
+  filters: Array<{ key: string; op: string; value: string }>
+): Promise<Record<string, unknown>[]> {
+  const collected: Record<string, unknown>[] = [];
+  let page = 1;
+
+  while (true) {
+    const url = new URL(`${baseUrl}/api/v3/${endpointFor(source)}`);
+    filters.forEach((filter, index) => {
+      url.searchParams.set(`filter[${index}][key]`, filter.key);
+      url.searchParams.set(`filter[${index}][op]`, filter.op);
+      url.searchParams.set(`filter[${index}][value]`, filter.value);
+    });
+    addTobaccoFilter(url, filters.length);
+    url.searchParams.set("sort", "-createdAt");
+    url.searchParams.set("perPage", String(XENTRAL_PAGE_SIZE));
+    url.searchParams.set("page", String(page));
+
+    const response = await fetchWithTimeout(url.toString(), { headers }, 15_000);
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(
+        `Xentral API error ${response.status} ${response.statusText} while listing ${endpointFor(source)} — ${body.slice(0, 300)}`
+      );
+    }
+
+    const payload = (await response.json()) as { data?: unknown[] };
+    const pageRecords = (payload?.data ?? []) as Record<string, unknown>[];
+    collected.push(...pageRecords.map((record) => ({ ...record, [POLLER_SOURCE_KEY]: source })));
+
+    // V3 reports the current page but not the total record count. A short page
+    // is therefore the authoritative end-of-list signal.
+    if (pageRecords.length < XENTRAL_PAGE_SIZE) break;
+    page++;
   }
 
-  // Ensure product cache is loaded so tobacco filter works
-  await refreshProductCache();
+  return collected;
+}
 
-  // Build date filter — Xentral V3 createdAt requires full datetime: Y-m-dTH:i:sP
-  const since = new Date();
-  since.setDate(since.getDate() - lookbackDays);
-  since.setHours(0, 0, 0, 0);
-  const sinceStr = since.toISOString().replace(/\.\d{3}Z$/, "+00:00");
+function containsTobacco(positions: Array<Record<string, unknown>>) {
+  return positions.some((pos) => {
+    const product = pos.product as Record<string, unknown> | undefined;
+    const productNumber = String(product?.number ?? "");
+    if (productNumber && isTobaccoProductNumber(productNumber)) return true;
+    const productId = String(product?.id ?? "");
+    return Boolean(productId && isTobaccoProduct(productId));
+  });
+}
 
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${apiKey}`,
-    Accept: "application/json",
-  };
-
-  // Fetch the list of delivery notes from V3
-  const url = new URL(`${baseUrl}/api/v3/deliveryNotes`);
-  url.searchParams.set("filter[0][key]", "createdAt");
-  url.searchParams.set("filter[0][op]", "greaterThanOrEquals");
-  url.searchParams.set("filter[0][value]", sinceStr);
-  url.searchParams.set("sort", "-createdAt");
-  url.searchParams.set("perPage", "100");
-
-  const listResponse = await fetchWithTimeout(url.toString(), { headers }, 15_000);
-
-  if (!listResponse.ok) {
-    const body = await listResponse.text().catch(() => "");
-    throw new Error(
-      `Xentral API error ${listResponse.status} ${listResponse.statusText} — ${body.slice(0, 300)}`
-    );
-  }
-
-  const listData = (await listResponse.json()) as { data?: unknown[] };
-  const rawNotes: unknown[] = listData?.data ?? [];
-
-  const result: PollResult = {
-    fetched: rawNotes.length,
-    tobaccoFound: 0,
-    imported: 0,
-    errors: 0,
-    skipped: 0,
-    details: [],
-  };
-
-  if (rawNotes.length === 0) return result;
-
-  // Process notes in parallel batches of 5 to avoid overwhelming Xentral
+async function processDocuments(
+  rawDocuments: Record<string, unknown>[],
+  baseUrl: string,
+  headers: Record<string, string>,
+  result: PollResult
+) {
   const CONCURRENCY = 5;
 
-  async function processOne(raw: unknown): Promise<void> {
-    const note = raw as Record<string, unknown>;
-    const id = String(note.id ?? "");
-    const number = String(note.documentNumber ?? note.number ?? id);
+  async function processOne(note: Record<string, unknown>) {
+    const source = sourceFor(note);
+    const nativeId = String(note.id ?? "");
+    const localId = storedXentralId(source, nativeId);
+    const number = String(note.documentNumber ?? note.number ?? nativeId);
+
+    // Delivery notes are dispatched documents by definition. SalesOrders are a
+    // fallback for the operations team and become eligible only once Xentral
+    // reports them as completed; this avoids issuing a dispatch QR early.
+    if (source === "salesOrder" && String(note.status ?? "").toLowerCase() !== "completed") {
+      result.skipped++;
+      return;
+    }
+
+    let existing = await getDeliveryNoteByXentralId(localId).catch(() => null);
+
+    // A SalesOrder import is the pre-delivery fallback. Do not create a second
+    // local record when the same SalesOrder already has a ready/sent record.
+    const relatedSalesOrderId = source === "deliveryNote"
+      ? String((note.salesOrder as Record<string, unknown> | undefined)?.id ?? "")
+      : nativeId;
+    if (!existing && relatedSalesOrderId) {
+      existing = await getDeliveryNoteBySalesOrderId(relatedSalesOrderId).catch(() => null);
+    }
+
+    if (existing?.status === "ready" || existing?.status === "sent") {
+      // Resolve or retain the human-facing sales-order number so an existing
+      // delivery-note row is searchable by the number operations uses.
+      if (relatedSalesOrderId && !existing.salesOrderNumber) {
+        try {
+          let salesOrderNumber = source === "salesOrder" ? number : "";
+          if (!salesOrderNumber) {
+            const linkedSalesOrder = await fetchNoteDetail(
+              baseUrl,
+              relatedSalesOrderId,
+              { id: relatedSalesOrderId },
+              headers,
+              "salesOrder"
+            );
+            salesOrderNumber = String(linkedSalesOrder.salesOrderNumber ?? "");
+          }
+          if (salesOrderNumber) {
+            await updateSalesOrderNumberBySalesOrderId(relatedSalesOrderId, salesOrderNumber);
+          }
+        } catch (error) {
+          console.warn(`[Poller] Could not backfill sales order number ${relatedSalesOrderId}:`, error);
+        }
+      }
+      result.skipped++;
+      result.details.push({ id: nativeId, number, status: existing.status, isNew: false });
+      return;
+    }
 
     try {
-      // Fetch V3 detail — this gives us lineItems with product IDs
-      const fullNote = await fetchNoteDetail(baseUrl!, id, note, headers);
-
-      // Pre-filter: check if any position is a tobacco product
-      // Uses SKU prefix "95" as primary check (works without cache),
-      // and Category 95000 cache as secondary check.
-      const positions = (fullNote.positions as Array<Record<string, unknown>>) ?? [];
-      const hasTobacco = positions.some((pos) => {
-        const prod = pos.product as Record<string, unknown> | undefined;
-        const productNumber = String(prod?.number ?? "");
-        if (productNumber && isTobaccoProductNumber(productNumber)) return true;
-        const productId = String(prod?.id ?? "");
-        if (productId && isTobaccoProduct(productId)) return true;
-        return false;
-      });
-
-      if (!hasTobacco) {
-        // Not a tobacco order — skip silently, do not write to DB
+      const fullDocument = await fetchNoteDetail(baseUrl, nativeId, note, headers, source);
+      const positions = (fullDocument.positions as Array<Record<string, unknown>>) ?? [];
+      if (!containsTobacco(positions)) {
         result.skipped++;
         return;
       }
 
       result.tobaccoFound++;
-
-      // Check if already in DB as "ready" — skip re-processing
-      const existing = await getDeliveryNoteByXentralId(id).catch(() => null);
+      const processed = await processWebhookPayload(fullDocument);
       const isNew = !existing;
-
-      if (existing?.status === "ready") {
-        // Already successfully processed — count as skipped, not an error
-        result.skipped++;
-        result.details.push({ id, number, status: "ready", isNew: false });
-        return;
-      }
-
-      const processed = await processWebhookPayload(fullNote);
-      result.details.push({ id, number, status: processed.status, isNew });
+      result.details.push({ id: nativeId, number, status: processed.status, isNew });
 
       if (processed.status === "ready") {
         if (isNew) result.imported++;
@@ -449,97 +520,71 @@ export async function fetchAndProcessDeliveryNotes(
         result.skipped++;
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      result.details.push({ id, number, status: "error", isNew: true, error: msg });
+      const message = err instanceof Error ? err.message : String(err);
+      result.details.push({ id: nativeId, number, status: "error", isNew: !existing, error: message });
       result.errors++;
-      console.error(`[Poller] Failed to process delivery note ${id}:`, err);
+      console.error(`[Poller] Failed to process ${source} ${nativeId}:`, err);
     }
   }
 
-  // Run in batches
-  for (let i = 0; i < rawNotes.length; i += CONCURRENCY) {
-    const batch = rawNotes.slice(i, i + CONCURRENCY);
-    await Promise.all(batch.map(processOne));
+  for (let start = 0; start < rawDocuments.length; start += CONCURRENCY) {
+    await Promise.all(rawDocuments.slice(start, start + CONCURRENCY).map(processOne));
   }
+}
 
+function getXentralConfig() {
+  const baseUrl = (process.env.XENTRAL_API_URL ?? process.env.XENTRAL_BASE_URL)?.replace(/\/$/, "");
+  const apiKey = process.env.XENTRAL_API_KEY;
+  if (!baseUrl || !apiKey) {
+    throw new Error("XENTRAL_API_URL and XENTRAL_API_KEY must be set to fetch orders from Xentral");
+  }
+  return {
+    baseUrl,
+    headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" } as Record<string, string>,
+  };
+}
+
+/**
+ * Fetch all recent tobacco delivery notes and completed tobacco SalesOrders.
+ * V3 list paging is followed until its final short page, preventing any
+ * first-page (100-record) truncation.
+ */
+export async function fetchAndProcessDeliveryNotes(lookbackDays = 7): Promise<PollResult> {
+  const { baseUrl, headers } = getXentralConfig();
+  await refreshProductCache();
+
+  const since = new Date();
+  since.setDate(since.getDate() - lookbackDays);
+  since.setHours(0, 0, 0, 0);
+  const sinceStr = since.toISOString().replace(/\.\d{3}Z$/, "+00:00");
+  const recentFilter = [{ key: "createdAt", op: "greaterThanOrEquals", value: sinceStr }];
+
+  const [deliveryNotes, salesOrders] = await Promise.all([
+    listDocuments(baseUrl, headers, "deliveryNote", recentFilter),
+    listDocuments(baseUrl, headers, "salesOrder", recentFilter),
+  ]);
+
+  const result = createPollResult();
+  result.fetched = deliveryNotes.length + salesOrders.length;
+  await processDocuments([...deliveryNotes, ...salesOrders], baseUrl, headers, result);
   return result;
 }
 
 /**
- * Fetch a single delivery note by its Xentral document number (e.g. LN-2026-00123).
- * Uses the documentNumber filter on the V3 list endpoint to find the exact note.
+ * Fetch a tobacco delivery note or completed tobacco SalesOrder by the
+ * document number shown in Xentral (for example, 621314).
  */
-export async function fetchDeliveryNoteByDocumentNumber(
-  documentNumber: string
-): Promise<PollResult> {
-  const baseUrl = (process.env.XENTRAL_API_URL ?? process.env.XENTRAL_BASE_URL)?.replace(/\/$/, "");
-  const apiKey = process.env.XENTRAL_API_KEY;
-
-  if (!baseUrl || !apiKey) {
-    throw new Error(
-      "XENTRAL_API_URL and XENTRAL_API_KEY must be set to fetch orders from Xentral"
-    );
-  }
-
+export async function fetchDeliveryNoteByDocumentNumber(documentNumber: string): Promise<PollResult> {
+  const { baseUrl, headers } = getXentralConfig();
   await refreshProductCache();
+  const exactFilter = [{ key: "documentNumber", op: "equals", value: documentNumber.trim() }];
+  const [deliveryNotes, salesOrders] = await Promise.all([
+    listDocuments(baseUrl, headers, "deliveryNote", exactFilter),
+    listDocuments(baseUrl, headers, "salesOrder", exactFilter),
+  ]);
 
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${apiKey}`,
-    Accept: "application/json",
-  };
-
-  const url = new URL(`${baseUrl}/api/v3/deliveryNotes`);
-  url.searchParams.set("filter[0][key]", "documentNumber");
-  url.searchParams.set("filter[0][op]", "equals");
-  url.searchParams.set("filter[0][value]", documentNumber.trim());
-
-  const listResponse = await fetchWithTimeout(url.toString(), { headers }, 15_000);
-
-  if (!listResponse.ok) {
-    const body = await listResponse.text().catch(() => "");
-    throw new Error(
-      `Xentral API error ${listResponse.status} ${listResponse.statusText} — ${body.slice(0, 300)}`
-    );
-  }
-
-  const listData = (await listResponse.json()) as { data?: unknown[] };
-  const rawNotes: unknown[] = listData?.data ?? [];
-
-  const result: PollResult = {
-    fetched: rawNotes.length,
-    tobaccoFound: 0,
-    imported: 0,
-    errors: 0,
-    skipped: 0,
-    details: [],
-  };
-
-  if (rawNotes.length === 0) return result;
-
-  // Process the single matched note (or the few returned)
-  for (const raw of rawNotes) {
-    const note = raw as Record<string, unknown>;
-    const id = String(note.id ?? "");
-    const number = String(note.documentNumber ?? note.number ?? id);
-
-    try {
-      const fullNote = await fetchNoteDetail(baseUrl, id, note, headers);
-      result.tobaccoFound++;
-      const existing = await getDeliveryNoteByXentralId(id).catch(() => null);
-      const isNew = !existing;
-      const processed = await processWebhookPayload(fullNote);
-      result.details.push({ id, number, status: processed.status, isNew });
-      if (processed.status === "ready") {
-        if (isNew) result.imported++;
-      } else if (processed.status === "error") {
-        result.errors++;
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      result.details.push({ id, number, status: "error", isNew: true, error: msg });
-      result.errors++;
-    }
-  }
-
+  const result = createPollResult();
+  result.fetched = deliveryNotes.length + salesOrders.length;
+  await processDocuments([...deliveryNotes, ...salesOrders], baseUrl, headers, result);
   return result;
 }

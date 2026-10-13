@@ -77,6 +77,7 @@ export async function upsertDeliveryNote(note: InsertDeliveryNote) {
     .onDuplicateKeyUpdate({
       set: {
         xentralNumber: note.xentralNumber,
+        salesOrderNumber: note.salesOrderNumber,
         customerId: note.customerId,
         customerName: note.customerName,
         eoid: note.eoid,
@@ -142,6 +143,31 @@ export async function getDeliveryNoteByXentralId(xentralId: string) {
   return notes[0];
 }
 
+/** Locate an imported SalesOrder by its native Xentral ID. */
+export async function getDeliveryNoteBySalesOrderId(salesOrderId: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const notes = await db
+    .select()
+    .from(deliveryNotes)
+    .where(eq(deliveryNotes.salesOrderId, salesOrderId))
+    .limit(1);
+  return notes[0];
+}
+
+/** Backfill the human-facing sales order number for an existing import. */
+export async function updateSalesOrderNumberBySalesOrderId(
+  salesOrderId: string,
+  salesOrderNumber: string
+) {
+  const db = await getDb();
+  if (!db || !salesOrderNumber) return;
+  await db
+    .update(deliveryNotes)
+    .set({ salesOrderNumber })
+    .where(eq(deliveryNotes.salesOrderId, salesOrderId));
+}
+
 export async function listDeliveryNotes(opts: {
   page: number;
   pageSize: number;
@@ -155,7 +181,7 @@ export async function listDeliveryNotes(opts: {
   if (opts.status) conditions.push(eq(deliveryNotes.status, opts.status));
   if (opts.search) {
     conditions.push(
-      sql`(${deliveryNotes.xentralNumber} LIKE ${`%${opts.search}%`} OR ${deliveryNotes.customerName} LIKE ${`%${opts.search}%`})`
+      sql`(${deliveryNotes.xentralNumber} LIKE ${`%${opts.search}%`} OR ${deliveryNotes.salesOrderNumber} LIKE ${`%${opts.search}%`} OR ${deliveryNotes.customerName} LIKE ${`%${opts.search}%`})`
     );
   }
 

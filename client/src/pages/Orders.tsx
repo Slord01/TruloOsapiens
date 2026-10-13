@@ -52,13 +52,13 @@ export default function Orders() {
     search: search || undefined,
   });
 
-  // Fetch a single delivery note by document number
+  // Fetch a single delivery note or completed sales order by document number
   const fetchByDocMutation = trpc.orders.fetchByDocumentNumber.useMutation({
     onSuccess: (result) => {
       utils.orders.list.invalidate();
       setDocNumberInput("");
       if (result.fetched === 0) {
-        toast.error(`No delivery note found with that document number`);
+        toast.error(`No eligible tobacco order found with that number`);
       } else if (result.errors > 0) {
         toast.warning(`Fetched — check order for errors`);
       } else {
@@ -70,19 +70,19 @@ export default function Orders() {
     },
   });
 
-  // Primary action: fetch delivery notes from Xentral API
+  // Primary action: fetch delivery notes and completed sales orders from Xentral API
   const fetchMutation = trpc.orders.fetchFromXentral.useMutation({
     onSuccess: (result) => {
       utils.orders.list.invalidate();
       if (result.fetched === 0) {
-        toast.info(`No delivery notes found in the last ${lookbackDays} days`);
+        toast.info(`No eligible tobacco orders found in the last ${lookbackDays} days`);
       } else {
         const tobaccoCount = result.tobaccoFound ?? 0;
         const readyCount = result.imported;
         const errorCount = result.errors;
         const skippedCount = result.skipped;
         if (tobaccoCount === 0) {
-          toast.info(`Scanned ${result.fetched} delivery note${result.fetched !== 1 ? "s" : ""} — no tobacco orders found`);
+          toast.info(`Scanned ${result.fetched} Xentral record${result.fetched !== 1 ? "s" : ""} — no eligible tobacco orders found`);
         } else if (readyCount > 0 && errorCount === 0) {
           toast.success(
             `${tobaccoCount} tobacco order${tobaccoCount !== 1 ? "s" : ""} found — ${readyCount} ready${skippedCount > 0 ? `, ${skippedCount} already processed` : ""}`
@@ -224,7 +224,7 @@ export default function Orders() {
               className="hidden md:flex items-center gap-1.5"
             >
               <Input
-                placeholder="Doc number…"
+            placeholder="Order / delivery no…"
                 value={docNumberInput}
                 onChange={(e) => setDocNumberInput(e.target.value)}
                 className="h-8 w-36 text-xs bg-card border-border text-foreground placeholder:text-muted-foreground"
@@ -236,7 +236,7 @@ export default function Orders() {
                 variant="outline"
                 disabled={!docNumberInput.trim() || fetchByDocMutation.isPending}
                 className="h-8 px-2 border-border text-foreground hover:bg-accent"
-                title="Fetch this specific delivery note from Xentral"
+                title="Fetch this specific delivery note or completed sales order from Xentral"
               >
                 {fetchByDocMutation.isPending ? (
                   <RefreshCw className="h-3.5 w-3.5 animate-spin" />
@@ -353,7 +353,7 @@ export default function Orders() {
             </div>
             <p className="font-medium text-foreground">No orders found</p>
             <p className="text-sm text-muted-foreground mt-1 max-w-xs">
-              Click <strong className="text-foreground">Fetch Orders</strong> to pull recent delivery notes from Xentral,
+              Click <strong className="text-foreground">Fetch Orders</strong> to pull recent delivery notes and completed sales orders from Xentral,
               or configure a webhook in Xentral to push them automatically.
             </p>
           </div>
